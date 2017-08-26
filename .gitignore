@@ -1,0 +1,7 @@
+.vs
+*.vsp
+
+/bin
+/obj
+/packages
+/LinqToDB.Templates
