@@ -51,8 +51,6 @@ namespace WikiTasks
         static Db db;
         WebClient wc;
 
-        PetScanEntry[] petScanResult;
-
         string ApiRequest(string parameters)
         {
             byte[] gzb = null;
@@ -322,6 +320,19 @@ namespace WikiTasks
             Console.WriteLine(" Done");
         }
 
+        void DumpBadParameters()
+        {
+            var importEntries = JsonConvert.DeserializeObject<ImportEntry[]>(
+                File.ReadAllText("import_entries.json"));
+
+            var errArts = new List<string>();
+            foreach (var article in db.Articles.ToArray())
+                if (!importEntries.Any(ie => ie.RootItem == article.WikidataItem))
+                    errArts.Add(article.Title);
+
+            File.WriteAllLines("bad_parameters.txt", errArts.OrderBy(t => t));
+        }
+
         Program()
         {
             FillArticlesDb();
@@ -329,7 +340,7 @@ namespace WikiTasks
             List<Article> articles;
             ProcessArticles(out articles);
             ConvertNamesToItems(articles);
-
+            DumpBadParameters();
             ApplyChanges();
         }
 
