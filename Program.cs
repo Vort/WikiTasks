@@ -314,7 +314,9 @@ namespace WikiTasks
             Console.Write("Parsing articles");
             Stopwatch stopwatch = new Stopwatch();
             stopwatch.Start();
-            Parallel.ForEach(articles, article =>
+            Parallel.ForEach(articles,
+                new ParallelOptions { MaxDegreeOfParallelism = remoteMode ? 1 : -1 },
+                article =>
             {
                 AntlrErrorListener ael = new AntlrErrorListener();
                 AntlrInputStream inputStream = new AntlrInputStream(article.WikiText);
