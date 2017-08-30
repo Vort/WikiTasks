@@ -7,15 +7,34 @@ using System.IO;
 using System.IO.Compression;
 using System.Linq;
 using System.Net;
+using System.Security.Cryptography;
 using System.Text;
 using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
-using System.Web;
 using System.Xml;
 
 namespace WikiTasks
 {
+    static class OAuth
+    {
+        static OAuth()
+        {
+            var lines = File.ReadAllLines("auth.txt");
+            if (lines.Length != 4)
+                throw new Exception();
+            ConsumerToken = lines[0];
+            ConsumerSecret = lines[1];
+            AccessToken = lines[2];
+            AccessSecret = lines[3];
+        }
+
+        public static readonly string ConsumerToken;
+        public static readonly string ConsumerSecret;
+        public static readonly string AccessToken;
+        public static readonly string AccessSecret;
+    }
+
     public class Db : LinqToDB.Data.DataConnection
     {
         public Db() : base("Db") { }
@@ -31,33 +50,80 @@ namespace WikiTasks
         static Db db;
 
         WebClient wc;
+        Random random;
         CookieContainer cookies;
-        string wikiUrl = "https://ru.wikipedia.org";
+        const string appName = "WikiTasks";
+        const string wikiUrl = "https://ru.wikipedia.org";
 
-        string ApiRequest(string getParameters, params string[] postParameters)
+        public static string UrlEncode(string s)
+        {
+            const string unreserved = "abcdefghijklmnopqrstuvwxyz" +
+                "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_.~";
+            var sb = new StringBuilder();
+            var bytes = Encoding.UTF8.GetBytes(s);
+            foreach (byte b in bytes)
+            {
+                if (unreserved.Contains((char)b))
+                    sb.Append((char)b);
+                else
+                    sb.Append($"%{b:X2}");
+            }
+            return sb.ToString();
+        }
+
+        string ApiPostRequest(params string[] postParameters)
         {
             if (postParameters.Length % 2 != 0)
                 throw new Exception();
 
+            var postParametersList = new List<KeyValuePair<string, string>>();
+            for (int i = 0; i < postParameters.Length / 2; i++)
+            {
+                postParametersList.Add(new KeyValuePair<string, string>(
+                    postParameters[i * 2], postParameters[i * 2 + 1]));
+            }
+            postParametersList.Add(new KeyValuePair<string, string>("maxlag", "1"));
+
+            var postBody = string.Join("&", postParametersList.Select(
+                p => UrlEncode(p.Key) + "=" + UrlEncode(p.Value)));
+
             byte[] gzb = null;
             for (;;)
             {
-                string url = wikiUrl + "/w/api.php" + getParameters + "&maxlag=1";
-                if (postParameters != null)
-                {
-                    var sb = new StringBuilder();
-                    for (int i = 0; i < postParameters.Length / 2; i++)
-                    {
-                        if (i != 0)
-                            sb.Append('&');
-                        sb.Append(postParameters[i * 2]);
-                        sb.Append('=');
-                        sb.Append(HttpUtility.UrlEncode(postParameters[i * 2 + 1]));
-                    }
-                    gzb = wc.UploadData(url, Encoding.ASCII.GetBytes(sb.ToString()));
-                }
-                else
-                    gzb = wc.DownloadData(url);
+                var headerParams = new Dictionary<string, string>();
+                headerParams["oauth_consumer_key"] = OAuth.ConsumerToken;
+                headerParams["oauth_token"] = OAuth.AccessToken;
+                headerParams["oauth_signature_method"] = "HMAC-SHA1";
+                headerParams["oauth_timestamp"] = DateTimeOffset.Now.ToUnixTimeSeconds().ToString();
+                headerParams["oauth_version"] = "1.0";
+
+                var nonce = new StringBuilder();
+                for (int i = 0; i < 32; i++)
+                    nonce.Append((char)(random.Next(26) + 'a'));
+                headerParams["oauth_nonce"] = nonce.ToString();
+
+                var allParams = headerParams.Union(postParametersList).OrderBy(p => p.Key).ToArray();
+                var allParamsJoined = string.Join("&", allParams.Select(
+                    p => UrlEncode(p.Key) + "=" + UrlEncode(p.Value)));
+
+                string url = wikiUrl + "/w/api.php";
+                string signatureBase = string.Join("&", new string[] { "POST", url, allParamsJoined }.
+                    Select(s => UrlEncode(s)));
+
+                string signature = Convert.ToBase64String(new HMACSHA1(
+                    Encoding.ASCII.GetBytes(OAuth.ConsumerSecret + "&" + OAuth.AccessSecret)).
+                    ComputeHash(Encoding.ASCII.GetBytes(signatureBase)));
+                headerParams["oauth_signature"] = signature;
+
+                string oauthHeader = "OAuth " + string.Join(",",
+                    headerParams.Select(p => UrlEncode(p.Key) + "=" + UrlEncode(p.Value)));
+                wc.Headers["Authorization"] = oauthHeader;
+
+                wc.Headers["Accept-Encoding"] = "gzip";
+                wc.Headers["Content-Type"] = "application/x-www-form-urlencoded";
+                wc.Headers["User-Agent"] = appName;
+
+                gzb = wc.UploadData(url, Encoding.ASCII.GetBytes(postBody.ToString()));
                 if (wc.ResponseHeaders["Retry-After"] != null)
                 {
                     int retrySec = int.Parse(wc.ResponseHeaders["Retry-After"]);
@@ -90,15 +156,15 @@ namespace WikiTasks
             for (;;)
             {
                 string continueParam = "";
-                string xml = ApiRequest(
-                    "?action=query" +
-                    "&list=linterrors" +
-                    "&format=xml" +
-                    "&lntcategories=" + errorCategory +
-                    "&lntlimit=500" +
-                    "&lntnamespace=0|14|100|104" +
-                    "&lntfrom=" + lntfrom +
-                    "&continue=" + continueParam);
+                string xml = ApiPostRequest(
+                    "action", "query",
+                    "list", "linterrors",
+                    "format", "xml",
+                    "lntcategories", errorCategory,
+                    "lntlimit", "500",
+                    "lntnamespace", "0|14|100|104",
+                    "lntfrom", lntfrom,
+                    "continue", continueParam);
                 Console.Write('.');
 
                 XmlDocument doc = new XmlDocument();
@@ -177,12 +243,12 @@ namespace WikiTasks
             foreach (List<int> chunk in updChunks)
             {
                 string idss = string.Join("|", chunk);
-                string xml = ApiRequest(
-                    "?action=query" +
-                    "&prop=revisions" +
-                    "&rvprop=timestamp|content" +
-                    "&format=xml" +
-                    "&pageids=" + idss);
+                string xml = ApiPostRequest(
+                    "action", "query",
+                    "prop", "revisions",
+                    "rvprop", "timestamp|content",
+                    "format", "xml",
+                    "pageids", idss);
                 Console.Write('.');
 
                 List<Article> articles = GetArticles(xml);
@@ -196,38 +262,26 @@ namespace WikiTasks
 
         string GetToken(string type)
         {
-            string xml = ApiRequest(
-                "?action=query" +
-                "&format=xml" +
-                "&meta=tokens" +
-                "&type=" + type);
+            string xml = ApiPostRequest(
+                "action", "query",
+                "format", "xml",
+                "meta", "tokens",
+                "type", type);
 
             XmlDocument doc = new XmlDocument();
             doc.LoadXml(xml);
+
+            if (doc.SelectNodes("/api/error").Count == 1)
+                return null;
 
             return doc.SelectNodes("/api/query/tokens")[0].Attributes[type + "token"].InnerText;
         }
 
-        bool Login(string token, string name, string password)
-        {
-            string xml = ApiRequest(
-                "?action=login" +
-                "&format=xml",
-                "lgname", name,
-                "lgpassword", password,
-                "lgtoken", token);
-
-            XmlDocument doc = new XmlDocument();
-            doc.LoadXml(xml);
-
-            return doc.SelectSingleNode("/api/login").Attributes["result"].InnerText == "Success";
-        }
-
         bool EditPage(string csrfToken, string timestamp, int pageId, string summary, string text)
         {
-            string xml = ApiRequest(
-                "?action=edit" +
-                "&format=xml",
+            string xml = ApiPostRequest(
+                "action", "edit",
+                "format", "xml",
                 "bot", "true",
                 "pageid", pageId.ToString(),
                 "summary", summary,
@@ -241,6 +295,12 @@ namespace WikiTasks
             if (doc.SelectNodes("/api/error").Count == 1)
                 return false;
             return doc.SelectSingleNode("/api/edit").Attributes["result"].InnerText == "Success";
+        }
+
+        static bool HaveTable(string name)
+        {
+            return db.DataProvider.GetSchemaProvider().
+                GetSchema(db).Tables.Any(t => t.TableName == name);
         }
 
         void ParseArticles()
@@ -280,11 +340,8 @@ namespace WikiTasks
             stopwatch.Stop();
 
 
-            if (db.DataProvider.GetSchemaProvider().GetSchema(db).
-                Tables.Any(t => t.TableName == "Replacements"))
-            {
+            if (HaveTable("Replacements"))
                 db.DropTable<Replacement>();
-            }
             db.CreateTable<Replacement>();
             int id = 0;
             db.BeginTransaction();
@@ -389,8 +446,7 @@ namespace WikiTasks
         {
             Console.Write("Making replacements");
 
-            var articles = db.Articles.Where(a => db.Replacements.Any(r => r.PageId == a.PageId)).
-                OrderByDescending(a => a.PageId).ToArray();
+            var articles = db.Articles.OrderByDescending(a => a.PageId).ToArray();
             foreach (var article in articles)
             {
                 var replacements = db.Replacements.Where(
@@ -423,63 +479,37 @@ namespace WikiTasks
                 Console.WriteLine("Remote mode enabled");
 
             wc = new WebClient();
-            wc.Headers.Add("Accept-Encoding", "gzip");
-            wc.Headers.Add("Content-Type", "application/x-www-form-urlencoded");
-            wc.Headers.Add("User-Agent", "WikiTasks");
-
             cookies = new CookieContainer();
-
-            string[] settings = File.ReadAllLines("auth.txt");
-            string botName = settings[0];
-            string botPassword = settings[1];
+            random = new Random();
 
             Console.Write("Authenticating...");
-            string loginToken = GetToken("login");
-            if (!Login(loginToken, botName, botPassword))
+            string csrfToken = GetToken("csrf");
+            if (csrfToken == null)
             {
-                Console.WriteLine(" Login failed");
+                Console.WriteLine(" Failed");
                 return;
             }
-            string csrfToken = GetToken("csrf");
             Console.WriteLine(" Done");
 
-            for (;;)
+            Console.WriteLine($"[{DateTime.Now}] Task is starting");
+            if (remoteMode)
             {
-                Console.WriteLine($"[{DateTime.Now}] Task is starting");
-                if (remoteMode)
-                {
-                    if (db.DataProvider.GetSchemaProvider().GetSchema(db).
-                        Tables.Any(t => t.TableName == "Articles"))
-                    {
-                        db.DropTable<Article>();
-                    }
-                    if (db.DataProvider.GetSchemaProvider().GetSchema(db).
-                        Tables.Any(t => t.TableName == "Replacements"))
-                    {
-                        db.DropTable<Replacement>();
-                    }
-                }
-
-                if (!db.DataProvider.GetSchemaProvider().GetSchema(db).
-                    Tables.Any(t => t.TableName == "Articles"))
-                {
-                    GetLintErrors("bogus-image-options");
-                    DownloadArticles();
-                }
-
-                ParseArticles();
-                MakeReplacements(csrfToken);
-
-                Console.WriteLine($"[{DateTime.Now}] Task is finished");
-
-                if (!remoteMode)
-                    return;
-
-                var delay = TimeSpan.FromHours(24);
-                Console.WriteLine($"Sleeping for {delay}");
-                Console.WriteLine();
-                Thread.Sleep(delay);
+                if (HaveTable("Articles"))
+                    db.DropTable<Article>();
+                if (HaveTable("Replacements"))
+                    db.DropTable<Replacement>();
             }
+
+            if (!HaveTable("Articles"))
+            {
+                GetLintErrors("bogus-image-options");
+                DownloadArticles();
+            }
+
+            ParseArticles();
+            MakeReplacements(csrfToken);
+
+            Console.WriteLine($"[{DateTime.Now}] Task is finished");
         }
 
         static void Main(string[] args)
