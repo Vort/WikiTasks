@@ -204,16 +204,19 @@ namespace WikiTasks
 
             public bool Equals(string x, string y)
             {
+                string trimX = x.Trim();
+                string trimY = y.Trim();
                 foreach (var dup in dups)
-                    if (dup.Contains(x) && dup.Contains(y))
+                    if (dup.Contains(trimX) && dup.Contains(trimY))
                         return true;
                 return x == y;
             }
 
             public int GetHashCode(string obj)
             {
+                string trimObj = obj.Trim();
                 for (int i = 0; i < dups.Length; i++)
-                    if (dups[i].Contains(obj))
+                    if (dups[i].Contains(trimObj))
                         return i;
                 return obj.GetHashCode();
             }
