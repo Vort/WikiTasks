@@ -184,6 +184,73 @@ namespace WikiTasks
                 GetSchema(db).Tables.Any(t => t.TableName == name);
         }
 
+        class ParamsEqualityComparer : IEqualityComparer<string>
+        {
+            HashSet<string>[] dups;
+
+            public ParamsEqualityComparer()
+            {
+                dups = new HashSet<string>[]
+                {
+                    new HashSet<string>() { "thumb", "thumbnail", "мини", "миниатюра" },
+                    new HashSet<string>() { "frame", "framed", "обрамить" },
+                    new HashSet<string>() { "frameless", "безрамки" },
+                    new HashSet<string>() { "border", "граница" },
+                    new HashSet<string>() { "left", "слева" },
+                    new HashSet<string>() { "center", "центр" },
+                    new HashSet<string>() { "right", "справа" }
+                };
+            }
+
+            public bool Equals(string x, string y)
+            {
+                foreach (var dup in dups)
+                    if (dup.Contains(x) && dup.Contains(y))
+                        return true;
+                return x == y;
+            }
+
+            public int GetHashCode(string obj)
+            {
+                for (int i = 0; i < dups.Length; i++)
+                    if (dups[i].Contains(obj))
+                        return i;
+                return obj.GetHashCode();
+            }
+        }
+
+        string ParamReplace(string param)
+        {
+            string trimParam = param.Trim();
+            string[] rightRepl = {"rıght", "ight", "rait", "righ", "riht", "rigt",
+                "richt", "rihgt", "rihts", "rught", "wright", "write", "rihgt", "ritht",
+                "rifgt", "rigrt", "rifht", "rightt", "tight", "rigjht", "rjght", "rigjt",
+                "rught", "whrite", "raight", "rucht", "rght", "rigth", "rightt", "roght",
+                "rignt", "righn", "rihht", "righr", "lright", "righft", "righjt",
+                "вправо", "право", "правее", "права", "праворуч", "кшпре", "срава", "яправа" };
+            string[] thumbRepl = { "miniatur", "miniatyr", "mini", "міні", "thum", "thunb",
+                "thoumb", "thumbs", "humb", "trumb", "tumb", "tumbs", "rhumb" };
+            string[] leftRepl = { "leftt", "lrft", "ltft", "ліворуч", "лево", "зьлева", "левее" };
+            if (rightRepl.Contains(trimParam))
+                return "right";
+            if (thumbRepl.Contains(trimParam))
+                return "thumb";
+            if (leftRepl.Contains(trimParam))
+                return "left";
+
+            string pxPattern1 = "^([0-9]{2,3}) *(пск|пркс|пс|пх|п|зч|рх|PX|Px|xp|x|p|pix|pxl|pxL|pcx|pxt|pz|pt|ps|dpi)?$";
+            string pxPattern2 = "^(пкс|пк|px|x) *([0-9]{2,3})$";
+            string pxPattern3 = "^([0-9]{2,3}) +(px|пкс)$";
+            if (Regex.IsMatch(trimParam, pxPattern1))
+                return Regex.Replace(trimParam, pxPattern1, "$1px");
+            else if (Regex.IsMatch(trimParam, pxPattern2))
+                return Regex.Replace(trimParam, pxPattern2, "$2px");
+            else if (Regex.IsMatch(trimParam, pxPattern3))
+                return trimParam.Replace(" ", "");
+            else
+                return param;
+        }
+
         void ParseArticles()
         {
             int processed = 0;
@@ -227,6 +294,7 @@ namespace WikiTasks
                 db.DropTable<Replacement>();
             db.CreateTable<Replacement>();
             int id = 0;
+            var pec = new ParamsEqualityComparer();
             db.BeginTransaction();
             foreach (var article in articles)
             {
@@ -236,7 +304,7 @@ namespace WikiTasks
                 foreach (FileInvoke inv in article.FileInvokes)
                 {
                     inv.Params.RemoveAll(p => string.IsNullOrWhiteSpace(p) || p.Trim() == "default");
-                    inv.Params = inv.Params.Select(p => ParamReplace(p)).Reverse().Distinct().Reverse().ToList();
+                    inv.Params = inv.Params.Select(p => ParamReplace(p)).Reverse().Distinct(pec).Reverse().ToList();
 
                     Replacement r = new Replacement();
                     r.PageId = article.PageId;
@@ -291,38 +359,6 @@ namespace WikiTasks
                 errorLog.AddRange(article.Errors);
             }
             File.WriteAllLines("error_log.txt", errorLog.ToArray(), Encoding.UTF8);
-        }
-
-        string ParamReplace(string param)
-        {
-            string trimParam = param.Trim();
-            string[] rightRepl = {"rıght", "ight", "rait", "righ", "riht", "rigt",
-                "richt", "rihgt", "rihts", "rught", "wright", "write", "rihgt", "ritht",
-                "rifgt", "rigrt", "rifht", "rightt", "tight", "rigjht", "rjght", "rigjt",
-                "rught", "whrite", "raight", "rucht", "rght", "rigth", "rightt", "roght",
-                "rignt", "righn", "rihht", "righr", "lright", "righft", "righjt",
-                "вправо", "право", "правее", "права", "праворуч", "кшпре", "срава", "яправа" };
-            string[] thumbRepl = { "miniatur", "miniatyr", "mini", "міні", "thum", "thunb",
-                "thoumb", "thumbs", "humb", "trumb", "tumb", "tumbs", "rhumb" };
-            string[] leftRepl = { "leftt", "lrft", "ltft", "ліворуч", "лево", "зьлева", "левее" };
-            if (rightRepl.Contains(trimParam))
-                return "right";
-            if (thumbRepl.Contains(trimParam))
-                return "thumb";
-            if (leftRepl.Contains(trimParam))
-                return "left";
-
-            string pxPattern1 = "^([0-9]{2,3}) *(пск|пркс|пс|пх|п|зч|рх|PX|Px|xp|x|p|pix|pxl|pxL|pcx|pxt|pz|pt|ps|dpi)?$";
-            string pxPattern2 = "^(пкс|пк|px|x) *([0-9]{2,3})$";
-            string pxPattern3 = "^([0-9]{2,3}) +(px|пкс)$";
-            if (Regex.IsMatch(trimParam, pxPattern1))
-                return Regex.Replace(trimParam, pxPattern1, "$1px");
-            else if (Regex.IsMatch(trimParam, pxPattern2))
-                return Regex.Replace(trimParam, pxPattern2, "$2px");
-            else if (Regex.IsMatch(trimParam, pxPattern3))
-                return trimParam.Replace(" ", "");
-            else
-                return param;
         }
 
         void MakeReplacements(string csrfToken)
