@@ -6,9 +6,7 @@ using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
-using System.IO.Compression;
 using System.Linq;
-using System.Net;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
@@ -49,30 +47,7 @@ namespace WikiTasks
     class Program
     {
         static Db db;
-        WebClient wc;
-
-        string ApiRequest(string parameters)
-        {
-            byte[] gzb = null;
-            for (;;)
-            {
-                gzb = wc.DownloadData("https://ru.wikipedia.org/w/api.php" + parameters + "&maxlag=1");
-                if (wc.ResponseHeaders["Retry-After"] != null)
-                {
-                    int retrySec = int.Parse(wc.ResponseHeaders["Retry-After"]);
-                    Thread.Sleep(retrySec * 1000);
-                }
-                else
-                    break;
-            }
-            GZipStream gzs = new GZipStream(
-                new MemoryStream(gzb), CompressionMode.Decompress);
-            MemoryStream xmls = new MemoryStream();
-            gzs.CopyTo(xmls);
-            byte[] xmlb = xmls.ToArray();
-            string xml = Encoding.UTF8.GetString(xmlb);
-            return xml;
-        }
+        WpApi wpApi;
 
         List<List<string>> SplitToChunks(string[] titles, int chunkSize)
         {
@@ -122,17 +97,18 @@ namespace WikiTasks
         void DownloadArticles()
         {
             Console.Write("Downloading articles");
+            wpApi = new WpApi();
             var updChunks = SplitToChunks(
                 db.Articles.Select(a => a.Title).ToArray(), 50);
             foreach (var chunk in updChunks)
             {
                 string titlesString = string.Join("|", chunk);
-                string xml = ApiRequest(
-                    "?action=query" +
-                    "&prop=revisions" +
-                    "&rvprop=content" +
-                    "&format=xml" +
-                    "&titles=" + titlesString);
+                string xml = wpApi.PostRequest(
+                    "action", "query",
+                    "prop", "revisions",
+                    "rvprop", "content",
+                    "format", "xml",
+                    "titles", titlesString);
                 Console.Write('.');
 
                 List<Article> articles = GetArticles(xml);
@@ -168,10 +144,6 @@ namespace WikiTasks
 
         void FillArticlesDb()
         {
-            wc = new WebClient();
-            wc.Headers.Add("Accept-Encoding", "gzip");
-            wc.Headers.Add("User-Agent", "WikiTasks");
-
             if (!db.DataProvider.GetSchemaProvider().GetSchema(db).
                 Tables.Any(t => t.TableName == "Articles"))
             {
@@ -272,7 +244,9 @@ namespace WikiTasks
 
         void ApplyChanges()
         {
-            string[] settings = File.ReadAllLines("auth.txt");
+            string[] settings = File.ReadAllLines("auth2.txt");
+            if (settings.Length != 2)
+                throw new Exception();
             string botName = settings[0];
             string botPassword = settings[1];
 

@@ -71,6 +71,7 @@
     <Compile Include="VBot\Utility.cs" />
     <Compile Include="VBot\WikimediaAPI.cs" />
     <Compile Include="WikiVisitor.cs" />
+    <Compile Include="WpApi.cs" />
   </ItemGroup>
   <ItemGroup>
     <None Include="App.config" />
