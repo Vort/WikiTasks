@@ -1,0 +1,19 @@
+SELECT ?CatLabel ?Region ?RegionLabel
+WHERE {
+  ?Cat wdt:P31 wd:Q4167836 .
+  ?Cat wdt:P971 wd:Q4022 .
+  ?Cat wdt:P971 ?Region .
+  ?Region wdt:P31/wdt:P279* wd:Q43263 .
+  ?cebArt schema:about ?Cat .
+  ?cebArt schema:inLanguage "ceb" .
+  ?Region rdfs:label ?RegionLabel
+  FILTER (lang(?RegionLabel) = "ru")
+  OPTIONAL {
+    ?Cat rdfs:label ?CatLabel
+    FILTER (lang(?CatLabel) = "ru")
+  }
+  FILTER (?Region != wd:Q4022)
+  FILTER NOT EXISTS {
+    ?Cat wdt:P971 wd:Q12284
+  }
+}

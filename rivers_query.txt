@@ -1,0 +1,28 @@
+﻿SELECT ?river ?nameCeb ?nameRu ?slbCeb ?slRu ?ate ?coord
+WHERE {
+  ?river wdt:P31 wd:Q4022 .
+  ?river wdt:P17 wd:Q159
+  OPTIONAL {
+    ?river wdt:P131 ?ate .
+    ?ate wdt:P31/wdt:P279* wd:Q43263
+  }
+  OPTIONAL {
+    ?river wdt:P625 ?coord
+  }
+  OPTIONAL {
+    ?river rdfs:label ?nameCeb
+    FILTER (lang(?nameCeb) = "ceb")
+  }       
+  OPTIONAL {
+    ?river rdfs:label ?nameRu
+    FILTER (lang(?nameRu) = "ru")
+  }
+  OPTIONAL {
+    ?slCeb schema:about ?river ;
+           schema:isPartOf <https://ceb.wikipedia.org/>
+    BIND(?slCeb != "" AS ?slbCeb)
+  }
+  OPTIONAL {
+    ?sluRu schema:about ?river ; schema:name ?slRu ; schema:inLanguage "ru"
+  }
+}
