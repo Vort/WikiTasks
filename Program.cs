@@ -186,7 +186,7 @@ namespace ConsoleApplication62
                 }
             }
 
-            int i = 0;
+            int totalCount = 0;
             var sb = new StringBuilder();
             foreach (var catToReg in catToRegionItems.OrderBy(ctr => ctr.CatLabel))
             {
@@ -208,11 +208,13 @@ namespace ConsoleApplication62
                 sb.AppendLine("''" + catToReg.RegionLabel + ":''");
 
                 sb.AppendLine("{|class=\"standard\"");
+                sb.AppendLine("!" + "№");
                 sb.AppendLine("!" + "ruwd");
                 sb.AppendLine("!" + "cebwd");
                 sb.AppendLine("!" + "ruarticle");
                 sb.AppendLine("!" + "cebcoord");
                 sb.AppendLine("|-");
+                int inRegionCount = 1;
                 foreach (var ruRiver in regionRiversRu.Where(r => r.Coord == null))
                 {
                     if (regionRiversRu.Count(r => r.NameRuMod == ruRiver.NameRuMod) != 1)
@@ -222,19 +224,20 @@ namespace ConsoleApplication62
                     var cebRiver = regionRiversCeb.First(r => r.NameCebMod == ruRiver.NameRuMod);
                     if (cebRiver.Coord == null)
                         continue;
+                    sb.AppendLine("|" + inRegionCount);
                     sb.AppendLine("|[[:d:" + ruRiver.Item + "|" + ruRiver.NameRu + "]]");
                     sb.AppendLine("|[[:d:" + cebRiver.Item + "|" + cebRiver.NameCeb + "]]");
                     sb.AppendLine("|[[" + ruRiver.SitelinkRu + "]]");
                     sb.AppendLine("|{{coord|" + cebRiver.Coord.Lat + "|" + cebRiver.Coord.Lon + "}}");
                     sb.AppendLine("|-");
-                    i++;
+                    totalCount++;
+                    inRegionCount++;
                 }
                 sb.AppendLine("|}");
                 sb.AppendLine("<br/>");
             }
+            sb.AppendLine("'''Всего:''' " + totalCount);
             File.WriteAllText("result.txt", sb.ToString());
-            Console.WriteLine();
-            Console.WriteLine("Count: " + i);
         }
 
         static void Main(string[] args)
