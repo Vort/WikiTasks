@@ -1,4 +1,4 @@
-﻿SELECT ?river ?nameCeb ?nameRu ?slbCeb ?slRu ?ate ?coord
+﻿SELECT ?river ?nameCeb ?nameRu ?slCeb ?slRu ?ate ?coord
 WHERE {
   ?river wdt:P31 wd:Q4022 .
   ?river wdt:P17 wd:Q159
@@ -18,9 +18,7 @@ WHERE {
     FILTER (lang(?nameRu) = "ru")
   }
   OPTIONAL {
-    ?slCeb schema:about ?river ;
-           schema:isPartOf <https://ceb.wikipedia.org/>
-    BIND(?slCeb != "" AS ?slbCeb)
+    ?sluCeb schema:about ?river ; schema:name ?slCeb ; schema:inLanguage "ceb"
   }
   OPTIONAL {
     ?sluRu schema:about ?river ; schema:name ?slRu ; schema:inLanguage "ru"

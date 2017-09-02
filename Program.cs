@@ -34,7 +34,7 @@ namespace WikiTasks
         public WdVariable river;
         public WdVariable nameRu;
         public WdVariable nameCeb;
-        public WdVariable slbCeb;
+        public WdVariable slCeb;
         public WdVariable slRu;
         public WdVariable ate;
         public WdVariable coord;
@@ -67,9 +67,8 @@ namespace WikiTasks
     {
         public string Item;
         public string SitelinkRu;
-        public bool SitelinkCeb;
+        public string SitelinkCeb;
         public string NameRu;
-        public string NameRuNorm;
         public string NameRuMod;
         public string NameCeb;
         public string NameCebMod;
@@ -184,22 +183,28 @@ namespace WikiTasks
                     NameRu = g.First().nameRu == null ? null : g.First().nameRu.value,
                     NameCeb = g.First().nameCeb == null ? null : g.First().nameCeb.value,
                     SitelinkRu = g.First().slRu == null ? null : g.First().slRu.value,
-                    SitelinkCeb = g.First().slbCeb != null
+                    SitelinkCeb = g.First().slCeb == null ? null : g.First().slCeb.value,
                 }).ToArray();
 
             foreach (var river in rivers)
             {
-                if (river.NameRu != null)
+                river.NameRuMod = river.NameRu;
+                river.NameCebMod = river.NameCeb;
+                if (river.NameRuMod == null)
+                    river.NameRuMod = river.SitelinkRu;
+                if (river.NameCebMod == null)
+                    river.NameCebMod = river.SitelinkCeb;
+                if (river.NameRuMod != null)
                 {
-                    if (river.NameRu.Contains("("))
-                        river.NameRuNorm = Regex.Replace(river.NameRu, " \\([^)]+\\)$", "");
-                    else
-                        river.NameRuNorm = river.NameRu;
-                    river.NameRuMod = Translit(river.NameRuNorm.ToLower().Replace("-", ""));
+                    if (river.NameRuMod.Contains("("))
+                        river.NameRuMod = Regex.Replace(river.NameRuMod, " \\([^)]+\\)$", "");
+                    river.NameRuMod = Translit(river.NameRuMod.ToLower().Replace("-", ""));
                 }
-                if (river.NameCeb != null)
+                if (river.NameCebMod != null)
                 {
-                    river.NameCebMod = river.NameCeb.ToLower().Replace("-", "");
+                    if (river.NameCebMod.Contains("("))
+                        river.NameCebMod = Regex.Replace(river.NameCebMod, " \\([^)]+\\)$", "");
+                    river.NameCebMod = river.NameCebMod.ToLower().Replace("-", "");
                 }
             }
 
@@ -213,9 +218,12 @@ namespace WikiTasks
                         riversDic[wpWdRiver].AteItems.Add(catToReg.RegionItem);
             }
 
-            var result = catToRegionItems.ToDictionary(c => c.RegionItem, c => new List<DupEntry>());
-            var onlyRuRivers = rivers.Where(r => r.SitelinkRu != null && !r.SitelinkCeb && r.NameRu != null);
-            var onlyCebRivers = rivers.Where(r => r.SitelinkRu == null && r.SitelinkCeb && r.NameCeb != null);
+            var result = catToRegionItems.ToDictionary(
+                c => c.RegionItem, c => new List<DupEntry>());
+            var onlyRuRivers = rivers.Where(
+                r => r.SitelinkRu != null && r.SitelinkCeb == null && r.NameRuMod != null);
+            var onlyCebRivers = rivers.Where(
+                r => r.SitelinkRu == null && r.SitelinkCeb != null && r.NameCebMod != null);
             var onlyRuNoCoordRivers = onlyRuRivers.Where(r => r.Coord == null).ToArray();
 
             int i = 0;
