@@ -1,5 +1,6 @@
 ﻿using Newtonsoft.Json;
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.IO.Compression;
 using System.Linq;
@@ -7,8 +8,9 @@ using System.Net;
 using System.Text;
 using System.Text.RegularExpressions;
 using System.Threading;
+using System.Threading.Tasks;
 
-namespace ConsoleApplication62
+namespace WikiTasks
 {
     class CatToRegion
     {
@@ -71,10 +73,18 @@ namespace ConsoleApplication62
         public string NameRuMod;
         public string NameCeb;
         public string NameCebMod;
-        public string AteItem;
+        public HashSet<string> AteItems;
         public Coord Coord;
     }
 
+    class DupEntry
+    {
+        public string SortName;
+        public string RuWd;
+        public string CebWd;
+        public string RuArticle;
+        public string CebCoord;
+    }
 
     class Program
     {
@@ -133,6 +143,7 @@ namespace ConsoleApplication62
 
         Program()
         {
+            Console.Write("Retrieving data...");
             if (!File.Exists("cats_wd.json"))
                 File.WriteAllText("cats_wd.json", RunWikidataQuery("cats_query.txt"));
             if (!File.Exists("rivers_wd.json"))
@@ -152,22 +163,28 @@ namespace ConsoleApplication62
             {
                 string fileName = "rivers_wp_" + catToReg.RegionItem + ".txt";
                 if (!File.Exists(fileName))
+                {
+                    Console.Write('.');
                     File.WriteAllLines(fileName, GetPetScanList(catToReg.CatLabel, 1));
+                }
             }
 
             wdJson = File.ReadAllText("rivers_wd.json");
             rawItems = JsonConvert.DeserializeObject<WdData>(wdJson).results.bindings;
+            Console.WriteLine(" Done");
 
-            River[] rivers = rawItems.Select(
-                ri => new River
+            Console.Write("Processing");
+            River[] rivers = rawItems.GroupBy(ri => ri.river.value).Select(
+                g => new River
                 {
-                    Item = ri.river.value.Replace("http://www.wikidata.org/entity/", ""),
-                    AteItem = ri.ate == null ? null : ri.ate.value.Replace("http://www.wikidata.org/entity/", ""),
-                    Coord = ri.coord == null ? null : new Coord(ri.coord.value),
-                    NameRu = ri.nameRu == null ? null : ri.nameRu.value,
-                    NameCeb = ri.nameCeb == null ? null : ri.nameCeb.value,
-                    SitelinkRu = ri.slRu == null ? null : ri.slRu.value,
-                    SitelinkCeb = ri.slbCeb != null
+                    Item = g.First().river.value.Replace("http://www.wikidata.org/entity/", ""),
+                    AteItems = new HashSet<string>(g.Where(ri => ri.ate != null).
+                        Select(ri => ri.ate.value.Replace("http://www.wikidata.org/entity/", ""))),
+                    Coord = g.First().coord == null ? null : new Coord(g.First().coord.value),
+                    NameRu = g.First().nameRu == null ? null : g.First().nameRu.value,
+                    NameCeb = g.First().nameCeb == null ? null : g.First().nameCeb.value,
+                    SitelinkRu = g.First().slRu == null ? null : g.First().slRu.value,
+                    SitelinkCeb = g.First().slbCeb != null
                 }).ToArray();
 
             foreach (var river in rivers)
@@ -186,25 +203,65 @@ namespace ConsoleApplication62
                 }
             }
 
-            int totalCount = 0;
+            var riversDic = rivers.ToDictionary(r => r.Item, r => r);
+            foreach (var catToReg in catToRegionItems)
+            {
+                string fileName = "rivers_wp_" + catToReg.RegionItem + ".txt";
+                string[] riversWpCat = File.ReadAllLines(fileName);
+                foreach (var wpWdRiver in riversWpCat)
+                    if (riversDic.ContainsKey(wpWdRiver))
+                        riversDic[wpWdRiver].AteItems.Add(catToReg.RegionItem);
+            }
+
+            var result = catToRegionItems.ToDictionary(c => c.RegionItem, c => new List<DupEntry>());
+            var onlyRuRivers = rivers.Where(r => r.SitelinkRu != null && !r.SitelinkCeb && r.NameRu != null);
+            var onlyCebRivers = rivers.Where(r => r.SitelinkRu == null && r.SitelinkCeb && r.NameCeb != null);
+            var onlyRuNoCoordRivers = onlyRuRivers.Where(r => r.Coord == null).ToArray();
+
+            int i = 0;
+            Parallel.ForEach(onlyRuNoCoordRivers, ruRiver =>
+            {
+                if (Interlocked.Increment(ref i) % 100 == 0)
+                    Console.Write('.');
+
+                if (onlyRuRivers.Count(r =>
+                    r.AteItems.Intersect(ruRiver.AteItems).Count() != 0 &&
+                    r.NameRuMod == ruRiver.NameRuMod) != 1)
+                {
+                    return;
+                }
+                if (onlyCebRivers.Count(r =>
+                    r.AteItems.Intersect(ruRiver.AteItems).Count() != 0 &&
+                    r.NameCebMod == ruRiver.NameRuMod) != 1)
+                {
+                    return;
+                }
+                var cebRiver = onlyCebRivers.First(r =>
+                    r.AteItems.Intersect(ruRiver.AteItems).Count() != 0 &&
+                    r.NameCebMod == ruRiver.NameRuMod);
+                if (cebRiver.Coord == null)
+                    return;
+
+                string regionItem = cebRiver.AteItems.Intersect(ruRiver.AteItems).First();
+
+                lock (result)
+                {
+                    result[regionItem].Add(new DupEntry()
+                    {
+                        SortName = ruRiver.NameRu,
+                        RuWd = "[[:d:" + ruRiver.Item + "|" + ruRiver.NameRu + "]]",
+                        CebWd = "[[:d:" + cebRiver.Item + "|" + cebRiver.NameCeb + "]]",
+                        RuArticle = "[[" + ruRiver.SitelinkRu + "]]",
+                        CebCoord = "{{coord|" + cebRiver.Coord.Lat + "|" + cebRiver.Coord.Lon + "}}"
+                    });
+                }
+            });
+            Console.WriteLine(" Done");
+
             var sb = new StringBuilder();
             foreach (var catToReg in catToRegionItems.OrderBy(ctr => ctr.CatLabel))
             {
-                Console.Write('.');
-                string fileName = "rivers_wp_" + catToReg.RegionItem + ".txt";
-                string[] riversWpCat = File.ReadAllLines(fileName);
-
-                foreach (var wpWdRiver in riversWpCat)
-                    foreach (var river in rivers.Where(r => r.Item == wpWdRiver && r.AteItem == null))
-                        river.AteItem = catToReg.RegionItem;
-
-                var regionRivers = rivers.Where(r => r.AteItem == catToReg.RegionItem).ToArray();
-
-                var regionRiversRu = regionRivers.Where(
-                    r => r.SitelinkRu != null && !r.SitelinkCeb && r.NameRu != null).OrderBy(r => r.NameRu).ToArray();
-                var regionRiversCeb = regionRivers.Where(
-                    r => r.SitelinkRu == null && r.SitelinkCeb && r.NameCeb != null).ToArray();
-
+                var dupEntries = result[catToReg.RegionItem].OrderBy(de => de.SortName).ToArray();
                 sb.AppendLine("''" + catToReg.RegionLabel + ":''");
 
                 sb.AppendLine("{|class=\"standard\"");
@@ -214,29 +271,22 @@ namespace ConsoleApplication62
                 sb.AppendLine("!" + "ruarticle");
                 sb.AppendLine("!" + "cebcoord");
                 sb.AppendLine("|-");
-                int inRegionCount = 1;
-                foreach (var ruRiver in regionRiversRu.Where(r => r.Coord == null))
+
+                for (i = 0; i < dupEntries.Length; i++)
                 {
-                    if (regionRiversRu.Count(r => r.NameRuMod == ruRiver.NameRuMod) != 1)
-                        continue;
-                    if (regionRiversCeb.Count(r => r.NameCebMod == ruRiver.NameRuMod) != 1)
-                        continue;
-                    var cebRiver = regionRiversCeb.First(r => r.NameCebMod == ruRiver.NameRuMod);
-                    if (cebRiver.Coord == null)
-                        continue;
-                    sb.AppendLine("|" + inRegionCount);
-                    sb.AppendLine("|[[:d:" + ruRiver.Item + "|" + ruRiver.NameRu + "]]");
-                    sb.AppendLine("|[[:d:" + cebRiver.Item + "|" + cebRiver.NameCeb + "]]");
-                    sb.AppendLine("|[[" + ruRiver.SitelinkRu + "]]");
-                    sb.AppendLine("|{{coord|" + cebRiver.Coord.Lat + "|" + cebRiver.Coord.Lon + "}}");
+                    sb.AppendLine("|" + (i + 1));
+                    sb.AppendLine("|" + dupEntries[i].RuWd);
+                    sb.AppendLine("|" + dupEntries[i].CebWd);
+                    sb.AppendLine("|" + dupEntries[i].RuArticle);
+                    sb.AppendLine("|" + dupEntries[i].CebCoord);
                     sb.AppendLine("|-");
-                    totalCount++;
-                    inRegionCount++;
                 }
+
                 sb.AppendLine("|}");
                 sb.AppendLine("<br/>");
             }
-            sb.AppendLine("'''Всего:''' " + totalCount);
+
+            sb.AppendLine("'''Всего:''' " + result.Sum(r => r.Value.Count));
             File.WriteAllText("result.txt", sb.ToString());
         }
 
