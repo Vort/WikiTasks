@@ -10,7 +10,6 @@ using System.Linq;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
-using System.Web;
 using System.Xml;
 using VBot;
 
@@ -131,7 +130,13 @@ namespace WikiTasks
             Console.Write("Requesting articles list...");
 
             db.BeginTransaction();
-            foreach (var petScanEntry in PetScan.Query(File.ReadAllText("petscan_query1.txt")))
+            foreach (var petScanEntry in PetScan.Query(
+                "language", "ru",
+                "categories", "Реки по алфавиту",
+                "negcats", "Википедия:Статьи о реках, требующие проверки",
+                "sparql", "SELECT ?r WHERE { ?r wdt:P31 wd:Q4022 ; wdt:P17 wd:Q159 FILTER NOT EXISTS { ?r wdt:P403 ?d } }",
+                "common_wiki", "cats",
+                "wikidata_item", "with"))
             {
                 db.Insert(new Article() {
                     Title = petScanEntry.ArticleTitle.Replace('_', ' '),
@@ -165,7 +170,7 @@ namespace WikiTasks
             int lexerErrors = 0;
             int parserErrors = 0;
 
-            articles = db.Articles/*.Take(50)*/.ToList();
+            articles = db.Articles.ToList();
 
             Console.Write("Parsing articles");
             Stopwatch stopwatch = new Stopwatch();
@@ -225,8 +230,12 @@ namespace WikiTasks
 
             var srcNames = articles.Where(a => a.MouthParam != null && !a.MouthParam.Contains('[')).
                 Select(a => a.MouthParam).OrderBy(m => m).Distinct().ToArray();
-            var qNames = PetScan.Query(File.ReadAllText("petscan_query2.txt").Replace("{{list}}",
-                HttpUtility.UrlEncode(string.Join("\r\n", srcNames))));
+            var qNames = PetScan.Query(
+                "sparql", "SELECT ?obj WHERE { VALUES ?okTypes { wd:Q4022 wd:Q23397 wd:Q39594 wd:Q165 wd:Q9430 wd:Q355304 wd:Q131681 wd:Q187971 wd:Q47521 wd:Q45776 wd:Q37901 wd:Q986177 wd:Q1973404 wd:Q47053 wd:Q204894 wd:Q12284 wd:Q1322134 wd:Q159675 wd:Q211302 wd:Q188025 wd:Q9019918 wd:Q6341928 wd:Q573344 wd:Q1172599 wd:Q283202 } ?obj wdt:P31 ?okTypes }",
+                "manual_list", string.Join("\r\n", srcNames),
+                "manual_list_wiki", "ruwiki",
+                "common_wiki", "manual",
+                "wikidata_item", "with");
 
             var importEntries = new List<ImportEntry>();
             foreach (var qName in qNames)

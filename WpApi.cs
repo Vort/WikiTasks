@@ -1,7 +1,6 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.IO;
-using System.IO.Compression;
 using System.Linq;
 using System.Net;
 using System.Security.Cryptography;
@@ -29,7 +28,7 @@ namespace WikiTasks
         public static readonly string AccessSecret;
     }
 
-    class WpApi
+    class WpApi : Api
     {
         WebClient wc;
         Random random;
@@ -42,22 +41,6 @@ namespace WikiTasks
             wc = new WebClient();
             cookies = new CookieContainer();
             random = new Random();
-        }
-
-        static string UrlEncode(string s)
-        {
-            const string unreserved = "abcdefghijklmnopqrstuvwxyz" +
-                "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_.~";
-            var sb = new StringBuilder();
-            var bytes = Encoding.UTF8.GetBytes(s);
-            foreach (byte b in bytes)
-            {
-                if (unreserved.Contains((char)b))
-                    sb.Append((char)b);
-                else
-                    sb.Append($"%{b:X2}");
-            }
-            return sb.ToString();
         }
 
         public string PostRequest(params string[] postParameters)
@@ -127,13 +110,7 @@ namespace WikiTasks
                 cookies.SetCookies(apiUri, wc.ResponseHeaders["Set-Cookie"]);
                 wc.Headers["Cookie"] = cookies.GetCookieHeader(apiUri);
             }
-            GZipStream gzs = new GZipStream(
-                new MemoryStream(gzb), CompressionMode.Decompress);
-            MemoryStream xmls = new MemoryStream();
-            gzs.CopyTo(xmls);
-            byte[] xmlb = xmls.ToArray();
-            string xml = Encoding.UTF8.GetString(xmlb);
-            return xml;
+            return GZipUnpack(gzb);
         }
     }
 }
