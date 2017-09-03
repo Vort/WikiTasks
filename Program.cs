@@ -313,7 +313,16 @@ namespace WikiTasks
                 if (!importEntries.Any(ie => ie.RootItem == article.WikidataItem))
                     errArts.Add(article.Title);
 
-            File.WriteAllLines("bad_parameters.txt", errArts.OrderBy(t => t));
+            File.WriteAllLines("bad_parameters_all.txt", errArts.OrderBy(t => t));
+
+            errArts = PetScan.Query(
+                "language", "ru",
+                "manual_list", string.Join("\r\n", errArts),
+                "manual_list_wiki", "ruwiki",
+                "categories", "Карточка реки: исправить: Устье\r\nКарточка реки: заполнить: Устье\r\nКарточка реки: нет статьи об устье",
+                "combination", "union",
+                "source_combination", "manual not categories").Select(pe => pe.ArticleTitle.Replace("_", " ")).ToList();
+            File.WriteAllLines("bad_parameters.txt", errArts.OrderBy(t => t).Select(n => $"* [[{n}]]"));
         }
 
         Program()
