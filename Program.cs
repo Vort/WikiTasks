@@ -225,11 +225,11 @@ namespace WikiTasks
         string ParamReplace(string param)
         {
             string trimParam = param.Trim();
-            string[] rightRepl = {"rıght", "ight", "rait", "righ", "riht", "rigt",
+            string[] rightRepl = {"rıght", "ight", "rait", "righ", "riht", "rigt", "righy",
                 "richt", "rihgt", "rihts", "rught", "wright", "write", "rihgt", "ritht",
                 "rifgt", "rigrt", "rifht", "rightt", "tight", "rigjht", "rjght", "rigjt",
                 "rught", "whrite", "raight", "rucht", "rght", "rigth", "rightt", "roght",
-                "rignt", "righn", "rihht", "righr", "lright", "righft", "righjt",
+                "rignt", "righn", "rihht", "righr", "reght", "rechts", "lright", "righft", "righjt",
                 "вправо", "право", "правее", "права", "праворуч", "кшпре", "срава", "яправа" };
             string[] thumbRepl = { "miniatur", "miniatyr", "mini", "міні", "thum", "thunb",
                 "thoumb", "thumbs", "humb", "trumb", "tumb", "tumbs", "rhumb" };
@@ -241,7 +241,7 @@ namespace WikiTasks
             if (leftRepl.Contains(trimParam))
                 return "left";
 
-            string pxPattern1 = "^([0-9]{2,3}) *(пск|пркс|пс|пх|п|зч|рх|PX|Px|xp|x|p|pix|pxl|pxL|pcx|pxt|pz|pt|ps|dpi)?$";
+            string pxPattern1 = "^([0-9]{2,3}) *(пск|пикс|пркс|пк|пс|пх|п|зч|рх|pх|рx|PX|Px|xp|x|p|pix|pxl|pxL|pcx|pxt|pz|pt|ps|dpi)?$";
             string pxPattern2 = "^(пкс|пк|px|x) *([0-9]{2,3})$";
             string pxPattern3 = "^([0-9]{2,3}) +(px|пкс)$";
             if (Regex.IsMatch(trimParam, pxPattern1))
@@ -381,7 +381,7 @@ namespace WikiTasks
                     newText = newText.Replace(replacement.SrcString, replacement.DstString);
 
                 bool isEditSuccessful = EditPage(csrfToken, article.Timestamp,
-                    article.PageId, "исправление разметки ([[ВП:РДБ#Bogus file options]])", newText);
+                    article.PageId, "исправление разметки", newText);
 
                 db.BeginTransaction();
                 foreach (var replacement in replacements)
