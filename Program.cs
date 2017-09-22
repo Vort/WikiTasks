@@ -2,10 +2,8 @@
 using LinqToDB.Mapping;
 using System;
 using System.Collections.Generic;
-using System.Diagnostics;
-using System.IO;
 using System.Linq;
-using System.Text;
+using System.Net;
 using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
@@ -53,6 +51,9 @@ namespace WikiTasks
     {
         WpApi api;
         static Db db;
+
+        const int editsPerMinute = 200;
+        const int connectionsLimit = 5;
 
         List<List<int>> SplitToChunks(List<int> ids, int chunkSize)
         {
@@ -184,9 +185,9 @@ namespace WikiTasks
             return doc.SelectNodes("/api/query/tokens")[0].Attributes[type + "token"].InnerText;
         }
 
-        bool EditPage(string csrfToken, string timestamp, int pageId, string summary, string text)
+        async Task<bool> EditPage(string csrfToken, string timestamp, int pageId, string summary, string text)
         {
-            string xml = api.PostRequest(
+            string xml = await api.PostRequestAsync(
                 "action", "edit",
                 "format", "xml",
                 "bot", "true",
@@ -237,6 +238,12 @@ namespace WikiTasks
                         throw new Exception();
                     string text2 = m.Groups[5].Value;
 
+                    string lcolor = color.ToLower();
+                    if (lcolor == "#000000")
+                        color = "black";
+                    else if (lcolor == "#ffffff")
+                        color = "white";
+
                     Replacement r = new Replacement();
                     r.PageId = article.PageId;
                     r.SrcString = m.Value;
@@ -259,36 +266,57 @@ namespace WikiTasks
         {
             Console.Write("Making replacements");
 
+            object contLock = new object();
+            var exitEvent = new ManualResetEvent(false);
+
             var articles = db.Articles.OrderByDescending(a => a.PageId).ToArray();
+            int editsLeft = articles.Length;
             foreach (var article in articles)
             {
                 var replacements = db.Replacements.Where(
                     r => r.PageId == article.PageId && r.Status == 0).ToArray();
                 if (replacements.Length == 0)
+                {
+                    lock (contLock)
+                        editsLeft--;
                     continue;
+                }
 
                 string newText = article.WikiText;
                 foreach (var replacement in replacements)
                     newText = newText.Replace(replacement.SrcString, replacement.DstString);
 
-                bool isEditSuccessful = EditPage(csrfToken, article.Timestamp, article.PageId,
+                Task<bool> editTask = EditPage(csrfToken, article.Timestamp, article.PageId,
                     "замена font color на шаблон [[Template:цветная ссылка|цветная ссылка]]", newText);
-
-                db.BeginTransaction();
-                foreach (var replacement in replacements)
+                editTask.ContinueWith(cont =>
                 {
-                    replacement.Status = isEditSuccessful ? (byte)1 : (byte)2;
-                    db.Update(replacement);
-                }
-                db.CommitTransaction();
-                Console.Write(isEditSuccessful ? '.' : 'x');
+                    bool isEditSuccessful = cont.Result;
+                    lock (contLock)
+                    {
+                        db.BeginTransaction();
+                        foreach (var replacement in replacements)
+                        {
+                            replacement.Status = isEditSuccessful ? (byte)1 : (byte)2;
+                            db.Update(replacement);
+                        }
+                        db.CommitTransaction();
+                        Console.Write(isEditSuccessful ? '.' : 'x');
+                        editsLeft--;
+                        if (editsLeft == 0)
+                            exitEvent.Set();
+                    }
+                });
+                Thread.Sleep(60 * 1000 / editsPerMinute);
             }
+            exitEvent.WaitOne();
             Console.WriteLine(" Done");
         }
 
         Program()
         {
             Console.WriteLine($"[{DateTime.Now:dd.MM.yyyy HH:mm:ss}] WikiTasks started");
+
+            ServicePointManager.DefaultConnectionLimit = connectionsLimit;
 
             api = new WpApi();
 
@@ -303,11 +331,11 @@ namespace WikiTasks
 
             if (!HaveTable("Articles"))
             {
-                SearchArticles("insource:/\\<font color *= *\\\"?\\#([a-zA-Z0-9]{6})\\\"?\\>\\[\\[Сборная/");
+                SearchArticles("insource:/\\<font color *= *\\\"?\\#([a-zA-Z0-9]{6})\\\"?\\>\\[\\[(Молодёжная|Женская)? ?(С|с)борная/");
                 DownloadArticles();
             }
 
-            //ParseArticles();
+            ParseArticles();
             MakeReplacements(csrfToken);
 
             Console.WriteLine($"[{DateTime.Now:dd.MM.yyyy HH:mm:ss}] WikiTasks finished");

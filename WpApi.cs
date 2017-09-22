@@ -6,6 +6,7 @@ using System.Net;
 using System.Security.Cryptography;
 using System.Text;
 using System.Threading;
+using System.Threading.Tasks;
 
 namespace WikiTasks
 {
@@ -30,20 +31,23 @@ namespace WikiTasks
 
     class WpApi : Api
     {
-        WebClient wc;
         Random random;
-        CookieContainer cookies;
         const string appName = "WikiTasks";
         const string wikiUrl = "https://ru.wikipedia.org";
 
         public WpApi()
         {
-            wc = new WebClient();
-            cookies = new CookieContainer();
             random = new Random();
         }
 
         public string PostRequest(params string[] postParameters)
+        {
+            var task = PostRequestAsync(postParameters);
+            task.Wait();
+            return task.Result;
+        }
+
+        public async Task<string> PostRequestAsync(params string[] postParameters)
         {
             if (postParameters.Length % 2 != 0)
                 throw new Exception();
@@ -59,6 +63,7 @@ namespace WikiTasks
             var postBody = string.Join("&", postParametersList.Select(
                 p => UrlEncode(p.Key) + "=" + UrlEncode(p.Value)));
 
+            WebClient wc = new WebClient();
             byte[] gzb = null;
             for (;;)
             {
@@ -70,8 +75,11 @@ namespace WikiTasks
                 headerParams["oauth_version"] = "1.0";
 
                 var nonce = new StringBuilder();
-                for (int i = 0; i < 32; i++)
-                    nonce.Append((char)(random.Next(26) + 'a'));
+                lock (random)
+                {
+                    for (int i = 0; i < 32; i++)
+                        nonce.Append((char)(random.Next(26) + 'a'));
+                }
                 headerParams["oauth_nonce"] = nonce.ToString();
 
                 var allParams = headerParams.Union(postParametersList).OrderBy(p => p.Key).ToArray();
@@ -95,7 +103,7 @@ namespace WikiTasks
                 wc.Headers["Content-Type"] = "application/x-www-form-urlencoded";
                 wc.Headers["User-Agent"] = appName;
 
-                gzb = wc.UploadData(url, Encoding.ASCII.GetBytes(postBody.ToString()));
+                gzb = await wc.UploadDataTaskAsync(url, Encoding.ASCII.GetBytes(postBody.ToString()));
                 if (wc.ResponseHeaders["Retry-After"] != null)
                 {
                     int retrySec = int.Parse(wc.ResponseHeaders["Retry-After"]);
@@ -103,12 +111,6 @@ namespace WikiTasks
                 }
                 else
                     break;
-            }
-            if (wc.ResponseHeaders["Set-Cookie"] != null)
-            {
-                var apiUri = new Uri(wikiUrl);
-                cookies.SetCookies(apiUri, wc.ResponseHeaders["Set-Cookie"]);
-                wc.Headers["Cookie"] = cookies.GetCookieHeader(apiUri);
             }
             return GZipUnpack(gzb);
         }
