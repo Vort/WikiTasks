@@ -52,8 +52,10 @@ namespace WikiTasks
         WpApi api;
         static Db db;
 
-        const int editsPerMinute = 200;
-        const int connectionsLimit = 5;
+        const int editsPerMinute = 180;
+        const int connectionsLimit = 4;
+
+        string csrfToken;
 
         List<List<int>> SplitToChunks(List<int> ids, int chunkSize)
         {
@@ -103,8 +105,10 @@ namespace WikiTasks
             return articles;
         }
 
-        void SearchArticles(string query)
+        void SearchArticles(string query, string ns = "0")
         {
+            if (HaveTable("Articles"))
+                db.DropTable<Article>();
             db.CreateTable<Article>();
 
             Console.Write("Searching articles");
@@ -120,6 +124,7 @@ namespace WikiTasks
                     "srinfo", "",
                     "srlimit", "100",
                     "sroffset", sroffset,
+                    "srnamespace", ns,
                     "format", "xml");
                 Console.Write('.');
 
@@ -147,7 +152,7 @@ namespace WikiTasks
         {
             Console.Write("Downloading articles");
             var updChunks = SplitToChunks(
-                db.Articles.Select(a => a.PageId).ToList(), 50);
+                db.Articles.Select(a => a.PageId).ToList(), 100);
             foreach (List<int> chunk in updChunks)
             {
                 string idss = string.Join("|", chunk);
@@ -213,43 +218,40 @@ namespace WikiTasks
 
         void ParseArticles()
         {
-            var articles = db.Articles.ToList();
+            Console.Write("Parsing articles...");
 
-            Console.Write("Parsing articles");
-
+            if (!HaveTable("Articles"))
+                throw new Exception();
             if (HaveTable("Replacements"))
                 db.DropTable<Replacement>();
             db.CreateTable<Replacement>();
 
-            string fc = "\\<font color *= *\"?(\\#[a-zA-Z0-9]{6})\"?\\>";
-            var regex = new Regex($"{fc}\\[\\[([^|]+)\\|{fc}([^\\]]+)\\]\\] *([^<|\n]+) *({fc})?");
+            var regex = new Regex("\\<font color *= *\"?(\\#[a-zA-Z0-9]{6})\"?\\>\\[\\[([^\\]]+)\\]\\] *\\<\\/font\\>");
+            var articles = db.Articles.ToList();
 
-            int id = 0;
+            int replId = 0;
             db.BeginTransaction();
             foreach (var article in articles)
             {
                 foreach (Match m in regex.Matches(article.WikiText))
                 {
                     string color = m.Groups[1].Value;
-                    if (color != m.Groups[3].Value)
-                        throw new Exception();
-                    string text1 = m.Groups[2].Value;
-                    if (text1 != m.Groups[4].Value)
-                        throw new Exception();
-                    string text2 = m.Groups[5].Value;
+                    string link = m.Groups[2].Value;
 
-                    string lcolor = color.ToLower();
-                    if (lcolor == "#000000")
+                    if (link.StartsWith("File:") || link.StartsWith("Файл:"))
+                        continue;
+
+                    if (color.ToLower() == "#000000")
                         color = "black";
-                    else if (lcolor == "#ffffff")
+                    else if (color.ToLower() == "#ffffff")
                         color = "white";
 
                     Replacement r = new Replacement();
                     r.PageId = article.PageId;
                     r.SrcString = m.Value;
-                    r.DstString = $"{{{{цветная ссылка|{color}|{text1}}}}} {{{{color|{color}|{text2}}}}}";
-                    r.Id = id;
-                    id++;
+                    r.DstString = $"{{{{цветная ссылка|{color}|{link}}}}}";
+                    r.Id = replId;
+                    replId++;
 
                     db.Insert(r);
                 }
@@ -262,28 +264,22 @@ namespace WikiTasks
             Console.WriteLine(" Replacements: " + db.Replacements.Count());
         }
 
-        void MakeReplacements(string csrfToken)
+        void MakeReplacements()
         {
             Console.Write("Making replacements");
 
-            object contLock = new object();
             var exitEvent = new ManualResetEvent(false);
+            var articles = db.Articles.ToDictionary(a => a.PageId);
+            var replGroups = db.Replacements.Where(r => r.Status == 0).
+                OrderByDescending(r => r.Id).GroupBy(r => r.PageId).Select(g => g.ToArray()).ToArray();
+            int editsLeft = replGroups.Length;
 
-            var articles = db.Articles.OrderByDescending(a => a.PageId).ToArray();
-            int editsLeft = articles.Length;
-            foreach (var article in articles)
+            foreach (var replGroup in replGroups)
             {
-                var replacements = db.Replacements.Where(
-                    r => r.PageId == article.PageId && r.Status == 0).ToArray();
-                if (replacements.Length == 0)
-                {
-                    lock (contLock)
-                        editsLeft--;
-                    continue;
-                }
+                var article = articles[replGroup.First().PageId];
 
                 string newText = article.WikiText;
-                foreach (var replacement in replacements)
+                foreach (var replacement in replGroup)
                     newText = newText.Replace(replacement.SrcString, replacement.DstString);
 
                 Task<bool> editTask = EditPage(csrfToken, article.Timestamp, article.PageId,
@@ -291,16 +287,18 @@ namespace WikiTasks
                 editTask.ContinueWith(cont =>
                 {
                     bool isEditSuccessful = cont.Result;
-                    lock (contLock)
+                    lock (db)
                     {
+                        Console.Write(isEditSuccessful ? '.' : 'x');
+
                         db.BeginTransaction();
-                        foreach (var replacement in replacements)
+                        foreach (var replacement in replGroup)
                         {
                             replacement.Status = isEditSuccessful ? (byte)1 : (byte)2;
                             db.Update(replacement);
                         }
                         db.CommitTransaction();
-                        Console.Write(isEditSuccessful ? '.' : 'x');
+
                         editsLeft--;
                         if (editsLeft == 0)
                             exitEvent.Set();
@@ -312,38 +310,36 @@ namespace WikiTasks
             Console.WriteLine(" Done");
         }
 
-        Program()
+        void GetArticles()
         {
-            Console.WriteLine($"[{DateTime.Now:dd.MM.yyyy HH:mm:ss}] WikiTasks started");
+            SearchArticles("insource:/\\<font color *= *\\\"?(\\#[a-zA-Z0-9]{6})\\\"?\\>\\[\\[[^\\]]+\\]\\] *\\<\\/font\\>/", "10");
+            DownloadArticles();
+        }
 
-            ServicePointManager.DefaultConnectionLimit = connectionsLimit;
-
-            api = new WpApi();
-
+        void ObtainEditToken()
+        {
             Console.Write("Authenticating...");
-            string csrfToken = GetToken("csrf");
+            csrfToken = GetToken("csrf");
             if (csrfToken == null)
             {
                 Console.WriteLine(" Failed");
-                return;
+                throw new Exception();
             }
             Console.WriteLine(" Done");
+        }
 
-            if (!HaveTable("Articles"))
-            {
-                SearchArticles("insource:/\\<font color *= *\\\"?\\#([a-zA-Z0-9]{6})\\\"?\\>\\[\\[(Молодёжная|Женская)? ?(С|с)борная/");
-                DownloadArticles();
-            }
-
+        Program()
+        {
+            api = new WpApi();
+            ObtainEditToken();
+            GetArticles();
             ParseArticles();
-            MakeReplacements(csrfToken);
-
-            Console.WriteLine($"[{DateTime.Now:dd.MM.yyyy HH:mm:ss}] WikiTasks finished");
-            Console.WriteLine();
+            MakeReplacements();
         }
 
         static void Main(string[] args)
         {
+            ServicePointManager.DefaultConnectionLimit = connectionsLimit;
             db = new Db();
             new Program();
             db.Dispose();
