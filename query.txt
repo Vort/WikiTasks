@@ -1,0 +1,24 @@
+SELECT ?Item ?ItemLabel ?Type ?TypeLabel ?Mouth ?MouthLabel ?Country ?CountryLabel ?Lat ?Lon ?Length ?RuWpLink
+WHERE
+{
+  VALUES ?Item { __Ids__ } .
+  OPTIONAL { ?Item wdt:P31 ?Type . }
+  OPTIONAL { ?Item wdt:P403 ?Mouth . }
+  OPTIONAL { ?Item wdt:P17 ?Country . }
+  OPTIONAL {
+    ?Item p:P625 ?Coordinate .
+    ?Coordinate psv:P625 ?CoordinateNode .
+    ?CoordinateNode wikibase:geoLatitude ?Lat .
+    ?CoordinateNode wikibase:geoLongitude ?Lon .
+  }
+  OPTIONAL {
+    ?Item p:P2043 ?LengthStatement .
+    ?LengthStatement psv:P2043 ?LengthNode .
+    ?LengthNode wikibase:quantityAmount ?LengthU .
+    ?LengthNode wikibase:quantityUnit ?Unit .
+    ?Unit wdt:P2370 ?ConversionSI .
+    BIND(?LengthU * ?ConversionSI / 1000 AS ?Length)
+  }
+  OPTIONAL { ?RuWpLink schema:about ?Item ; schema:isPartOf <https://ru.wikipedia.org/> }  
+  SERVICE wikibase:label { bd:serviceParam wikibase:language "ru" }
+}
