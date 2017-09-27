@@ -145,16 +145,6 @@ namespace WikiTasks
         public WdResult results;
     }
 
-    class LowTimeoutWebClient : WebClient
-    {
-        protected override WebRequest GetWebRequest(Uri uri)
-        {
-            WebRequest w = base.GetWebRequest(uri);
-            w.Timeout = 2000;
-            return w;
-        }
-    }
-
     class Program
     {
         public static double DegToRad(double degrees)
@@ -240,21 +230,24 @@ namespace WikiTasks
             }
 
             Console.Write("Downloading ways");
-            foreach (var chunk in SplitToChunks(reqWayIds.ToList(), 2000))
-            {
-                string wayJson = OverpassApi.Request(
-                    "[out:json][timeout:300];" +
-                    $"way(id:{string.Join(",", chunk)});" +
-                    "out body;");
-                var wayData = JsonConvert.DeserializeObject<OsmDataJson>(wayJson);
-                osmData.Ways.AddRange(wayData.elements.Select(w => new OsmWay
+            OverpassApi.Requests(
+                SplitToChunks(reqWayIds.ToList(), 2000).Select(chunk =>
+                "[out:json][timeout:300];" +
+                $"way(id:{string.Join(",", chunk)});" +
+                "out body;").ToArray(), wayJson =>
                 {
-                    Id = w.id,
-                    Tags = w.tags,
-                    NodeIds = w.nodes
-                }).ToArray());
-                Console.Write('.');
-            }
+                    var wayData = JsonConvert.DeserializeObject<OsmDataJson>(wayJson);
+                    lock (osmData)
+                    {
+                        osmData.Ways.AddRange(wayData.elements.Select(w => new OsmWay
+                        {
+                            Id = w.id,
+                            Tags = w.tags,
+                            NodeIds = w.nodes
+                        }).ToArray());
+                        Console.Write('.');
+                    }
+                });
             Console.WriteLine(" Done");
             reqWayIds = null;
 
@@ -263,21 +256,24 @@ namespace WikiTasks
                 reqNodeIds.UnionWith(way.NodeIds);
 
             Console.Write("Downloading nodes");
-            foreach (var chunk in SplitToChunks(reqNodeIds.ToList(), 25000))
-            {
-                string nodeJson = OverpassApi.Request(
-                    "[out:json][timeout:300];" +
-                    $"node(id:{string.Join(",", chunk)});" +
-                    "out skel;");
-                var nodeData = JsonConvert.DeserializeObject<OsmDataJson>(nodeJson);
-                osmData.Nodes.AddRange(nodeData.elements.Select(n => new OsmNode
+            OverpassApi.Requests(
+                SplitToChunks(reqNodeIds.ToList(), 20000).Select(chunk =>
+                "[out:json][timeout:300];" +
+                $"node(id:{string.Join(",", chunk)});" +
+                "out skel;").ToArray(), nodeJson =>
                 {
-                    Id = n.id,
-                    lat = n.lat,
-                    lon = n.lon
-                }).ToArray());
-                Console.Write('.');
-            }
+                    var nodeData = JsonConvert.DeserializeObject<OsmDataJson>(nodeJson);
+                    lock (osmData)
+                    {
+                        osmData.Nodes.AddRange(nodeData.elements.Select(n => new OsmNode
+                        {
+                            Id = n.id,
+                            lat = n.lat,
+                            lon = n.lon
+                        }).ToArray());
+                        Console.Write('.');
+                    }
+                });
             Console.WriteLine(" Done");
             reqNodeIds = null;
 
@@ -303,7 +299,7 @@ namespace WikiTasks
 
         Program()
         {
-            //DownloadOsmData();
+            DownloadOsmData();
 
             Stream stream = new FileStream("rivers.bin", FileMode.Open);
             osmData = Serializer.Deserialize<OsmData>(stream);
@@ -314,7 +310,7 @@ namespace WikiTasks
             var nodes = osmData.Nodes.ToDictionary(n => n.Id);
             osmData = null;
 
-            //DownloadWikidata(relations.Values.ToList());
+            DownloadWikidata(relations.Values.ToList());
 
             string wdJson = File.ReadAllText("wdq.json");
             var wdItems = JsonConvert.DeserializeObject<WdData>(wdJson).results.bindings;
