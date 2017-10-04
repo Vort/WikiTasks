@@ -33,7 +33,7 @@ namespace WikiTasks
     {
         Random random;
         const string appName = "WikiTasks";
-        const string wikiUrl = "https://ru.wikipedia.org";
+        const string wikiUrl = "https://commons.wikimedia.org";
 
         public WpApi()
         {
