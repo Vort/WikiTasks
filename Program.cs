@@ -13,6 +13,17 @@ using System.Xml;
 
 namespace WikiTasks
 {
+    public enum ProcessStatus
+    {
+        NotProcessed = 0,
+        Success = 1,
+        NoHighResolution = 2,
+        NoFlickrLink = 3,
+        OriginalNotFound = 4,
+        ImagesNotEqual = 5,
+        CommonsSizeMismatch = 6
+    }
+
     [Table(Name = "Images")]
     public class Image
     {
@@ -33,7 +44,7 @@ namespace WikiTasks
         [Column()]
         public string Comment;
         [Column()]
-        public int FlickrStatus;
+        public ProcessStatus Status;
         [Column()]
         public int OriginalWidth;
         [Column()]
@@ -223,7 +234,8 @@ namespace WikiTasks
                 throw new Exception();
 
             Console.Write("Checking and replacing");
-            var images = db.Images.Where(i => i.SingleRev && i.FlickrStatus == 0).ToArray();
+            var images = db.Images.Where(i => i.SingleRev &&
+                i.Status == ProcessStatus.NotProcessed).ToArray();
 
             WebClient wc = new WebClient();
 
@@ -265,48 +277,57 @@ namespace WikiTasks
                                 var fms = new MemoryStream(flickrFileData);
                                 var ci = System.Drawing.Image.FromStream(cms);
                                 var fi = System.Drawing.Image.FromStream(fms);
-                                ExifRotate.RotateImageByExifOrientationData(fi);
-                                var rfi = new Bitmap(fi, new Size(ci.Width, ci.Height));
-                                bool equal = bc.Equals((Bitmap)ci, rfi);
-
-                                if (equal)
+                                ExifRotate.RotateImageByExifOrientationData(ci);
+                                if (ci.Width == i.Width && ci.Height == i.Height)
                                 {
-                                    string result = api.PostRequest(
-                                        "action", "upload",
-                                        "filename", i.Title,
-                                        "url", source,
-                                        "comment", "better quality",
-                                        "token", csrfToken,
-                                        "format", "xml");
-                                    i.FlickrStatus = 1;
-                                    Console.Write("+");
-                                    Thread.Sleep(5000);
+                                    ExifRotate.RotateImageByExifOrientationData(fi);
+                                    var rfi = new Bitmap(fi, new Size(ci.Width, ci.Height));
+                                    bool equal = bc.Equals((Bitmap)ci, rfi);
+
+                                    if (equal)
+                                    {
+                                        string result = api.PostRequest(
+                                            "action", "upload",
+                                            "filename", i.Title,
+                                            "url", source,
+                                            "comment", "better quality",
+                                            "token", csrfToken,
+                                            "format", "xml");
+                                        i.Status = ProcessStatus.Success;
+                                        Console.Write("+");
+                                        Thread.Sleep(5000);
+                                    }
+                                    else
+                                    {
+                                        i.Status = ProcessStatus.ImagesNotEqual;
+                                        File.WriteAllBytes($"images\\{i.PageId}_c.jpeg", commonsFileData);
+                                        File.WriteAllBytes($"images\\{i.PageId}_f.jpeg", flickrFileData);
+                                        Console.Write("!");
+                                    }
                                 }
                                 else
                                 {
-                                    i.FlickrStatus = 5;
-                                    File.WriteAllBytes($"images\\{i.PageId}_c.jpeg", commonsFileData);
-                                    File.WriteAllBytes($"images\\{i.PageId}_f.jpeg", flickrFileData);
+                                    i.Status = ProcessStatus.CommonsSizeMismatch;
                                     Console.Write("!");
                                 }
                             }
                             else
                             {
-                                i.FlickrStatus = 2;
+                                i.Status = ProcessStatus.NoHighResolution;
                                 Console.Write("-");
                                 break;
                             }
                         }
                     }
-                    if (i.FlickrStatus == 0)
+                    if (i.Status == ProcessStatus.NotProcessed)
                     {
-                        i.FlickrStatus = 4;
+                        i.Status = ProcessStatus.OriginalNotFound;
                         Console.Write("x");
                     }
                 }
                 else
                 {
-                    i.FlickrStatus = 3;
+                    i.Status = ProcessStatus.NoFlickrLink;
                     Console.Write("*");
                 }
                 db.Update(i);
