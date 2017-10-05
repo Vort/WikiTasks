@@ -13,15 +13,36 @@ using System.Xml;
 
 namespace WikiTasks
 {
+
+    static class ShuffleClass
+    {
+        private static Random rng = new Random();
+
+        public static void Shuffle<T>(this IList<T> list)
+        {
+            int n = list.Count;
+            while (n > 1)
+            {
+                n--;
+                int k = rng.Next(n + 1);
+                T value = list[k];
+                list[k] = list[n];
+                list[n] = value;
+            }
+        }
+    }
+
     public enum ProcessStatus
     {
         NotProcessed = 0,
         Success = 1,
-        NoHighResolution = 2,
+        NoHigherResolution = 2,
         NoFlickrLink = 3,
         OriginalNotFound = 4,
         ImagesNotEqual = 5,
-        CommonsSizeMismatch = 6
+        CommonsSizeMismatch = 6,
+        FlickrErrorUnknown = 7,
+        FlickrErrorNotFound = 8,
     }
 
     [Table(Name = "Images")]
@@ -58,10 +79,33 @@ namespace WikiTasks
         public ITable<Image> Images { get { return GetTable<Image>(); } }
     }
 
+    class Delay
+    {
+        int msecDuration;
+        DateTime waitTill;
+
+        public Delay(int msecDuration)
+        {
+            this.msecDuration = msecDuration;
+        }
+
+        public void Wait()
+        {
+            int delay = (int)(waitTill - DateTime.Now).TotalMilliseconds;
+            if (delay > 0)
+                Thread.Sleep(delay);
+            waitTill = DateTime.Now.AddMilliseconds(msecDuration);
+        }
+    }
+
     class Program
     {
         WpApi api;
         static Db db;
+        string flickrKey;
+
+        Delay commonsDelay;
+        Delay flickrDelay;
 
         string csrfToken;
 
@@ -139,7 +183,7 @@ namespace WikiTasks
                     "format", "xml",
                     "cmprop", "ids",
                     "cmtitle", category,
-                    "cmlimit", "100",
+                    "cmlimit", "500",
                     "cmcontinue", continueParam);
                 Console.Write('.');
 
@@ -225,6 +269,95 @@ namespace WikiTasks
             Console.WriteLine(" Done");
         }
 
+        ProcessStatus ProcessImageEntry(Image image)
+        {
+            var m = Regex.Match(image.Comment, "/([0-9]+) using ");
+            if (!m.Success)
+                return ProcessStatus.NoFlickrLink;
+
+            long id = long.Parse(m.Groups[1].Value);
+            WebClient wc = new WebClient();
+            flickrDelay.Wait();
+            string xml = wc.DownloadString(
+                "https://api.flickr.com/services/rest/" +
+                "?method=flickr.photos.getSizes" +
+                "&api_key=" + flickrKey +
+                "&photo_id=" + id);
+            XmlDocument doc = new XmlDocument();
+            doc.LoadXml(xml);
+            var rspNode = doc.SelectSingleNode("/rsp");
+            if (rspNode.Attributes["stat"].InnerText == "fail")
+            {
+                var errNode = rspNode.SelectSingleNode("err");
+                int errCode = int.Parse(errNode.Attributes["code"].InnerText);
+                if (errCode == 1)
+                    return ProcessStatus.FlickrErrorNotFound;
+                else
+                    return ProcessStatus.FlickrErrorUnknown;
+            }
+
+            foreach (XmlNode sizeNode in doc.SelectNodes("/rsp/sizes/size"))
+            {
+                if (sizeNode.Attributes["label"].InnerText != "Original")
+                    continue;
+
+                int width = int.Parse(sizeNode.Attributes["width"].InnerText);
+                int height = int.Parse(sizeNode.Attributes["height"].InnerText);
+                string source = sizeNode.Attributes["source"].InnerText;
+                image.OriginalWidth = width;
+                image.OriginalHeight = height;
+                if (width <= image.Width || height <= image.Height)
+                    return ProcessStatus.NoHigherResolution;
+
+                byte[] commonsFileData = wc.DownloadData(image.CommonsUrl);
+                flickrDelay.Wait();
+                byte[] flickrFileData = wc.DownloadData(source);
+
+                var bc = new BitmapComparer(new CompareOptions
+                {
+                    AnalyzerType = AnalyzerTypes.CIE76,
+                    JustNoticeableDifference = 6
+                });
+
+                var cms = new MemoryStream(commonsFileData);
+                var ci = System.Drawing.Image.FromStream(cms);
+                ExifRotate.RotateImageByExifOrientationData(ci);
+                if (commonsFileData.Length != image.Size ||
+                    ci.Width != image.Width || ci.Height != image.Height)
+                {
+                    return ProcessStatus.CommonsSizeMismatch;
+                }
+
+                var fms = new MemoryStream(flickrFileData);
+                var fi = System.Drawing.Image.FromStream(fms);
+                ExifRotate.RotateImageByExifOrientationData(fi);
+
+                var rfi = new Bitmap(fi, new Size(ci.Width, ci.Height));
+                bool equal = bc.Equals((Bitmap)ci, rfi);
+
+                if (!equal)
+                {
+                    File.WriteAllBytes($"images\\{image.PageId}_c.jpeg", commonsFileData);
+                    File.WriteAllBytes($"images\\{image.PageId}_f.jpeg", flickrFileData);
+                    return ProcessStatus.ImagesNotEqual;
+                }
+
+                /*
+                commonsDelay.Wait();
+                string result = api.PostRequest(
+                    "action", "upload",
+                    "filename", image.Title,
+                    "url", source,
+                    "comment", "better quality",
+                    "token", csrfToken,
+                    "format", "xml");
+                */
+                return ProcessStatus.Success;
+            }
+
+            return ProcessStatus.OriginalNotFound;
+        }
+
         void CheckAndReplace()
         {
             if (!Directory.Exists("images"))
@@ -233,105 +366,37 @@ namespace WikiTasks
             if (!HaveTable("Images"))
                 throw new Exception();
 
-            Console.Write("Checking and replacing");
+            Console.Write("Checking and replacing...");
+
+            flickrKey = File.ReadAllText("flickr_key.txt");
+
+            commonsDelay = new Delay(5000);
+            flickrDelay = new Delay(1000);
+
             var images = db.Images.Where(i => i.SingleRev &&
                 i.Status == ProcessStatus.NotProcessed).ToArray();
+            images.Shuffle();
+            images = images.Take(20).ToArray();
 
-            WebClient wc = new WebClient();
-
-            foreach (var i in images)
+            foreach (var image in images)
             {
-                var m = Regex.Match(i.Comment, "/([0-9]+) using ");
-                if (m.Success)
+                char statusChar = 'x';
+                var statusCode = ProcessImageEntry(image);
+                switch (statusCode)
                 {
-                    long id = long.Parse(m.Groups[1].Value);
-                    string xml = wc.DownloadString(
-                        "https://api.flickr.com/services/rest/" +
-                        "?method=flickr.photos.getSizes" +
-                        "&api_key=12d6c742e9da7839c6bc0571bb614071" +
-                        "&photo_id=" + id);
-                    XmlDocument doc = new XmlDocument();
-                    doc.LoadXml(xml);
-                    foreach (XmlNode sizeNode in doc.SelectNodes("/rsp/sizes/size"))
-                    {
-                        if (sizeNode.Attributes["label"].InnerText == "Original")
-                        {
-                            int width = int.Parse(sizeNode.Attributes["width"].InnerText);
-                            int height = int.Parse(sizeNode.Attributes["height"].InnerText);
-                            string source = sizeNode.Attributes["source"].InnerText;
-                            i.OriginalWidth = width;
-                            i.OriginalHeight = height;
-                            if (width > i.Width && height > i.Height)
-                            {
-                                byte[] commonsFileData = wc.DownloadData(i.CommonsUrl);
-                                Thread.Sleep(1000);
-                                byte[] flickrFileData = wc.DownloadData(source);
-
-                                var bc = new BitmapComparer(new CompareOptions
-                                {
-                                    AnalyzerType = AnalyzerTypes.CIE76,
-                                    JustNoticeableDifference = 6
-                                });
-
-                                var cms = new MemoryStream(commonsFileData);
-                                var fms = new MemoryStream(flickrFileData);
-                                var ci = System.Drawing.Image.FromStream(cms);
-                                var fi = System.Drawing.Image.FromStream(fms);
-                                ExifRotate.RotateImageByExifOrientationData(ci);
-                                if (ci.Width == i.Width && ci.Height == i.Height)
-                                {
-                                    ExifRotate.RotateImageByExifOrientationData(fi);
-                                    var rfi = new Bitmap(fi, new Size(ci.Width, ci.Height));
-                                    bool equal = bc.Equals((Bitmap)ci, rfi);
-
-                                    if (equal)
-                                    {
-                                        string result = api.PostRequest(
-                                            "action", "upload",
-                                            "filename", i.Title,
-                                            "url", source,
-                                            "comment", "better quality",
-                                            "token", csrfToken,
-                                            "format", "xml");
-                                        i.Status = ProcessStatus.Success;
-                                        Console.Write("+");
-                                        Thread.Sleep(5000);
-                                    }
-                                    else
-                                    {
-                                        i.Status = ProcessStatus.ImagesNotEqual;
-                                        File.WriteAllBytes($"images\\{i.PageId}_c.jpeg", commonsFileData);
-                                        File.WriteAllBytes($"images\\{i.PageId}_f.jpeg", flickrFileData);
-                                        Console.Write("!");
-                                    }
-                                }
-                                else
-                                {
-                                    i.Status = ProcessStatus.CommonsSizeMismatch;
-                                    Console.Write("!");
-                                }
-                            }
-                            else
-                            {
-                                i.Status = ProcessStatus.NoHighResolution;
-                                Console.Write("-");
-                                break;
-                            }
-                        }
-                    }
-                    if (i.Status == ProcessStatus.NotProcessed)
-                    {
-                        i.Status = ProcessStatus.OriginalNotFound;
-                        Console.Write("x");
-                    }
+                    case ProcessStatus.Success:
+                        statusChar = '+';
+                        break;
+                    case ProcessStatus.NoHigherResolution:
+                        statusChar = '-';
+                        break;
+                    case ProcessStatus.ImagesNotEqual:
+                        statusChar = '!';
+                        break;
                 }
-                else
-                {
-                    i.Status = ProcessStatus.NoFlickrLink;
-                    Console.Write("*");
-                }
-                db.Update(i);
-                Thread.Sleep(1000);
+                image.Status = statusCode;
+                db.Update(image);
+                Console.Write(statusChar);
             }
 
             Console.WriteLine(" Done");
