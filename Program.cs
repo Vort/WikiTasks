@@ -42,7 +42,7 @@ namespace WikiTasks
         ImagesNotEqual = 5,
         CommonsSizeMismatch = 6,
         FlickrErrorUnknown = 7,
-        FlickrErrorNotFound = 8,
+        FlickrErrorNotFound = 8
     }
 
     [Table(Name = "Images")]
@@ -100,7 +100,7 @@ namespace WikiTasks
 
     class Program
     {
-        WpApi api;
+        MwApi api;
         static Db db;
         string flickrKey;
 
@@ -342,16 +342,21 @@ namespace WikiTasks
                     return ProcessStatus.ImagesNotEqual;
                 }
 
-                /*
+                string fileName = image.Title;
+                if (!fileName.StartsWith("File:"))
+                    throw new Exception();
+                fileName = fileName.Substring(5);
+
                 commonsDelay.Wait();
                 string result = api.PostRequest(
                     "action", "upload",
-                    "filename", image.Title,
-                    "url", source,
+                    "ignorewarnings", "true",
+                    "filename", fileName,
+                    "filesize", flickrFileData.Length.ToString(),
+                    "file", new MwApi.FileInfo { Data = flickrFileData, Name = fileName },
                     "comment", "better quality",
                     "token", csrfToken,
                     "format", "xml");
-                */
                 return ProcessStatus.Success;
             }
 
@@ -376,7 +381,7 @@ namespace WikiTasks
             var images = db.Images.Where(i => i.SingleRev &&
                 i.Status == ProcessStatus.NotProcessed).ToArray();
             images.Shuffle();
-            images = images.Take(20).ToArray();
+            images = images.Take(100).ToArray();
 
             foreach (var image in images)
             {
@@ -404,7 +409,7 @@ namespace WikiTasks
 
         Program()
         {
-            api = new WpApi();
+            api = new MwApi("commons.wikimedia.org");
             ObtainEditToken();
             //GetImageList();
             //GetImageInfo();

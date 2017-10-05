@@ -2,7 +2,7 @@
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
-using System.Net;
+using System.Net.Http;
 using System.Security.Cryptography;
 using System.Text;
 using System.Threading;
@@ -29,42 +29,60 @@ namespace WikiTasks
         public static readonly string AccessSecret;
     }
 
-    class WpApi : Api
-    {
-        Random random;
-        const string appName = "WikiTasks";
-        const string wikiUrl = "https://commons.wikimedia.org";
 
-        public WpApi()
+    class MwApi : Api
+    {
+        public class FileInfo
         {
-            random = new Random();
+            public byte[] Data;
+            public string Name;
         }
 
-        public string PostRequest(params string[] postParameters)
+        Random random;
+        HttpClient hc;
+        readonly string apiUrl;
+        const string appName = "WikiTasks";
+
+        public MwApi(string site)
+        {
+            random = new Random();
+            hc = new HttpClient();
+            hc.DefaultRequestHeaders.Add("User-Agent", appName);
+            hc.DefaultRequestHeaders.Add("Accept-Encoding", "gzip");
+            apiUrl = $"https://{site}/w/api.php";
+        }
+
+        public string PostRequest(params object[] postParameters)
         {
             var task = PostRequestAsync(postParameters);
             task.Wait();
             return task.Result;
         }
 
-        public async Task<string> PostRequestAsync(params string[] postParameters)
+        public async Task<string> PostRequestAsync(params object[] postParameters)
         {
             if (postParameters.Length % 2 != 0)
                 throw new Exception();
 
-            var postParametersList = new List<KeyValuePair<string, string>>();
+            var postData = new MultipartFormDataContent();
             for (int i = 0; i < postParameters.Length / 2; i++)
             {
-                postParametersList.Add(new KeyValuePair<string, string>(
-                    postParameters[i * 2], postParameters[i * 2 + 1]));
+                string key = postParameters[i * 2] as string;
+                object value = postParameters[i * 2 + 1];
+                string valueString = value as string;
+                FileInfo valueFileInfo = value as FileInfo;
+                if (key == null)
+                    throw new Exception();
+                if (valueString == null && valueFileInfo == null)
+                    throw new Exception();
+                if (valueString != null)
+                    postData.Add(new StringContent(value as string), key);
+                if (valueFileInfo != null)
+                    postData.Add(new ByteArrayContent(valueFileInfo.Data), key, valueFileInfo.Name);
             }
-            postParametersList.Add(new KeyValuePair<string, string>("maxlag", "1"));
+            postData.Add(new StringContent("1"), "maxlag");
 
-            var postBody = string.Join("&", postParametersList.Select(
-                p => UrlEncode(p.Key) + "=" + UrlEncode(p.Value)));
-
-            WebClient wc = new WebClient();
-            byte[] gzb = null;
+            HttpResponseMessage response = null;
             for (;;)
             {
                 var headerParams = new Dictionary<string, string>();
@@ -82,12 +100,11 @@ namespace WikiTasks
                 }
                 headerParams["oauth_nonce"] = nonce.ToString();
 
-                var allParams = headerParams.Union(postParametersList).OrderBy(p => p.Key).ToArray();
-                var allParamsJoined = string.Join("&", allParams.Select(
+                var headerParamsJoined = string.Join("&", headerParams.OrderBy(p => p.Key).Select(
                     p => UrlEncode(p.Key) + "=" + UrlEncode(p.Value)));
 
-                string url = wikiUrl + "/w/api.php";
-                string signatureBase = string.Join("&", new string[] { "POST", url, allParamsJoined }.
+                string signatureBase = string.Join("&",
+                    new string[] { "POST", apiUrl, headerParamsJoined }.
                     Select(s => UrlEncode(s)));
 
                 string signature = Convert.ToBase64String(new HMACSHA1(
@@ -97,22 +114,17 @@ namespace WikiTasks
 
                 string oauthHeader = "OAuth " + string.Join(",",
                     headerParams.Select(p => UrlEncode(p.Key) + "=" + UrlEncode(p.Value)));
-                wc.Headers["Authorization"] = oauthHeader;
+                var request = new HttpRequestMessage(HttpMethod.Post, apiUrl);
+                request.Headers.Add("Authorization", oauthHeader);
+                request.Content = postData;
 
-                wc.Headers["Accept-Encoding"] = "gzip";
-                wc.Headers["Content-Type"] = "application/x-www-form-urlencoded";
-                wc.Headers["User-Agent"] = appName;
-
-                gzb = await wc.UploadDataTaskAsync(url, Encoding.ASCII.GetBytes(postBody.ToString()));
-                if (wc.ResponseHeaders["Retry-After"] != null)
-                {
-                    int retrySec = int.Parse(wc.ResponseHeaders["Retry-After"]);
-                    Thread.Sleep(retrySec * 1000);
-                }
+                response = await hc.SendAsync(request);
+                if (response.Headers.RetryAfter != null)
+                    Thread.Sleep((int)response.Headers.RetryAfter.Delta.Value.TotalMilliseconds);
                 else
                     break;
             }
-            return GZipUnpack(gzb);
+            return GZipUnpack(await response.Content.ReadAsByteArrayAsync());
         }
     }
 }
