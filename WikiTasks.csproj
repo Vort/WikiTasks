@@ -57,14 +57,7 @@
   <ItemGroup>
     <Compile Include="Api.cs" />
     <Compile Include="ExifRotate.cs" />
-    <Compile Include="ImageDiff\AnalyzerTypes.cs" />
-    <Compile Include="ImageDiff\BitmapAnalyzerFactory.cs" />
-    <Compile Include="ImageDiff\BitmapComparer.cs" />
-    <Compile Include="ImageDiff\CIE76Analyzer.cs" />
-    <Compile Include="ImageDiff\CIELab.cs" />
-    <Compile Include="ImageDiff\CIExyz.cs" />
-    <Compile Include="ImageDiff\CompareOptions.cs" />
-    <Compile Include="ImageDiff\IBitmapAnalyzer.cs" />
+    <Compile Include="ImageDiff.cs" />
     <Compile Include="Program.cs" />
     <Compile Include="Properties\AssemblyInfo.cs" />
     <Compile Include="MwApi.cs" />

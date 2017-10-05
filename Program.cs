@@ -1,5 +1,4 @@
-﻿using ImageDiff;
-using LinqToDB;
+﻿using LinqToDB;
 using LinqToDB.Mapping;
 using System;
 using System.Collections.Generic;
@@ -13,25 +12,6 @@ using System.Xml;
 
 namespace WikiTasks
 {
-
-    static class ShuffleClass
-    {
-        private static Random rng = new Random();
-
-        public static void Shuffle<T>(this IList<T> list)
-        {
-            int n = list.Count;
-            while (n > 1)
-            {
-                n--;
-                int k = rng.Next(n + 1);
-                T value = list[k];
-                list[k] = list[n];
-                list[n] = value;
-            }
-        }
-    }
-
     public enum ProcessStatus
     {
         NotProcessed = 0,
@@ -66,6 +46,8 @@ namespace WikiTasks
         public string Comment;
         [Column()]
         public ProcessStatus Status;
+        [Column()]
+        public double MaxDeltaE;
         [Column()]
         public int OriginalWidth;
         [Column()]
@@ -247,7 +229,7 @@ namespace WikiTasks
 
             Console.Write("Retrieving image info");
             var updChunks = SplitToChunks(
-                db.Images.Select(a => a.PageId).ToList(), 50);
+                db.Images.Where(i => i.Title == null).Select(i => i.PageId).ToList(), 50);
             foreach (List<int> chunk in updChunks)
             {
                 string idss = string.Join("|", chunk);
@@ -313,12 +295,6 @@ namespace WikiTasks
                 flickrDelay.Wait();
                 byte[] flickrFileData = wc.DownloadData(source);
 
-                var bc = new BitmapComparer(new CompareOptions
-                {
-                    AnalyzerType = AnalyzerTypes.CIE76,
-                    JustNoticeableDifference = 6
-                });
-
                 var cms = new MemoryStream(commonsFileData);
                 var ci = System.Drawing.Image.FromStream(cms);
                 ExifRotate.RotateImageByExifOrientationData(ci);
@@ -332,10 +308,11 @@ namespace WikiTasks
                 var fi = System.Drawing.Image.FromStream(fms);
                 ExifRotate.RotateImageByExifOrientationData(fi);
 
-                var rfi = new Bitmap(fi, new Size(ci.Width, ci.Height));
-                bool equal = bc.Equals((Bitmap)ci, rfi);
+                var rfi = ImageDiff.ResizeImage(fi, ci.Width, ci.Height);
+                double maxDeltaE = ImageDiff.GetMaxDeltaE((Bitmap)ci, rfi);
 
-                if (!equal)
+                image.MaxDeltaE = Math.Round(maxDeltaE, 2);
+                if (maxDeltaE > 45.0)
                 {
                     File.WriteAllBytes($"images\\{image.PageId}_c.jpeg", commonsFileData);
                     File.WriteAllBytes($"images\\{image.PageId}_f.jpeg", flickrFileData);
@@ -380,9 +357,6 @@ namespace WikiTasks
 
             var images = db.Images.Where(i => i.SingleRev &&
                 i.Status == ProcessStatus.NotProcessed).ToArray();
-            images.Shuffle();
-            images = images.Take(100).ToArray();
-
             foreach (var image in images)
             {
                 char statusChar = 'x';
@@ -411,8 +385,8 @@ namespace WikiTasks
         {
             api = new MwApi("commons.wikimedia.org");
             ObtainEditToken();
-            //GetImageList();
-            //GetImageInfo();
+            GetImageList();
+            GetImageInfo();
             CheckAndReplace();
         }
 

@@ -54,9 +54,7 @@ namespace WikiTasks
 
         public string PostRequest(params object[] postParameters)
         {
-            var task = PostRequestAsync(postParameters);
-            task.Wait();
-            return task.Result;
+            return PostRequestAsync(postParameters).Result;
         }
 
         public async Task<string> PostRequestAsync(params object[] postParameters)
@@ -64,27 +62,26 @@ namespace WikiTasks
             if (postParameters.Length % 2 != 0)
                 throw new Exception();
 
-            var postData = new MultipartFormDataContent();
-            for (int i = 0; i < postParameters.Length / 2; i++)
-            {
-                string key = postParameters[i * 2] as string;
-                object value = postParameters[i * 2 + 1];
-                string valueString = value as string;
-                FileInfo valueFileInfo = value as FileInfo;
-                if (key == null)
-                    throw new Exception();
-                if (valueString == null && valueFileInfo == null)
-                    throw new Exception();
-                if (valueString != null)
-                    postData.Add(new StringContent(value as string), key);
-                if (valueFileInfo != null)
-                    postData.Add(new ByteArrayContent(valueFileInfo.Data), key, valueFileInfo.Name);
-            }
-            postData.Add(new StringContent("1"), "maxlag");
-
-            HttpResponseMessage response = null;
             for (;;)
             {
+                var postData = new MultipartFormDataContent();
+                for (int i = 0; i < postParameters.Length / 2; i++)
+                {
+                    string key = postParameters[i * 2] as string;
+                    object value = postParameters[i * 2 + 1];
+                    string valueString = value as string;
+                    FileInfo valueFileInfo = value as FileInfo;
+                    if (key == null)
+                        throw new Exception();
+                    if (valueString == null && valueFileInfo == null)
+                        throw new Exception();
+                    if (valueString != null)
+                        postData.Add(new StringContent(value as string), key);
+                    if (valueFileInfo != null)
+                        postData.Add(new ByteArrayContent(valueFileInfo.Data), key, valueFileInfo.Name);
+                }
+                postData.Add(new StringContent("1"), "maxlag");
+
                 var headerParams = new Dictionary<string, string>();
                 headerParams["oauth_consumer_key"] = OAuth.ConsumerToken;
                 headerParams["oauth_token"] = OAuth.AccessToken;
@@ -114,17 +111,17 @@ namespace WikiTasks
 
                 string oauthHeader = "OAuth " + string.Join(",",
                     headerParams.Select(p => UrlEncode(p.Key) + "=" + UrlEncode(p.Value)));
+
                 var request = new HttpRequestMessage(HttpMethod.Post, apiUrl);
                 request.Headers.Add("Authorization", oauthHeader);
                 request.Content = postData;
 
-                response = await hc.SendAsync(request);
+                var response = await hc.SendAsync(request);
                 if (response.Headers.RetryAfter != null)
                     Thread.Sleep((int)response.Headers.RetryAfter.Delta.Value.TotalMilliseconds);
                 else
-                    break;
+                    return GZipUnpack(await response.Content.ReadAsByteArrayAsync());
             }
-            return GZipUnpack(await response.Content.ReadAsByteArrayAsync());
         }
     }
 }
