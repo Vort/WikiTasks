@@ -22,7 +22,8 @@ namespace WikiTasks
         ImagesNotEqual = 5,
         CommonsSizeMismatch = 6,
         FlickrErrorUnknown = 7,
-        FlickrErrorNotFound = 8
+        FlickrErrorNotFound = 8,
+        CommonsUploadFailed = 9
     }
 
     [Table(Name = "Images")]
@@ -331,9 +332,18 @@ namespace WikiTasks
                     "filename", fileName,
                     "filesize", flickrFileData.Length.ToString(),
                     "file", new MwApi.FileInfo { Data = flickrFileData, Name = fileName },
-                    "comment", "better quality",
+                    "comment", "Uploading higher resolution from Flickr",
                     "token", csrfToken,
                     "format", "xml");
+
+                doc.LoadXml(result);
+                var uploadNode = doc.SelectSingleNode("/api/upload");
+                if (uploadNode.Attributes["result"].InnerText != "Success")
+                    return ProcessStatus.CommonsUploadFailed;
+                var iiNode = uploadNode.SelectSingleNode("imageinfo");
+                if (!iiNode.Attributes["html"].InnerText.Contains("Файл с этим именем уже существует"))
+                    throw new Exception();
+
                 return ProcessStatus.Success;
             }
 
