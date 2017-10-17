@@ -23,7 +23,27 @@ namespace WikiTasks
         CommonsSizeMismatch = 6,
         FlickrErrorUnknown = 7,
         FlickrErrorNotFound = 8,
-        CommonsUploadFailed = 9
+        WikimediaError = 9,
+        FilenameWithQuotes = 10,
+        FlickrSizeMismatch = 11,
+        ImageFormatMismatch = 12,
+        CommonsDownloadError = 13,
+        NonFreeLicense = 14
+    }
+
+    public enum FlickrLicense
+    {
+        AllRightsReserved = 0,
+        AttributionNonCommercialShareAlike = 1,
+        AttributionNonCommercial = 2,
+        AttributionNonCommercialNoDerivs = 3,
+        Attribution = 4,
+        AttributionShareAlike = 5,
+        AttributionNoDerivs = 6,
+        NoKnownCopyrightRestrictions = 7,
+        UnitedStatesGovernmentWork = 8,
+        PublicDomainDedication = 9,
+        PublicDomainMark = 10
     }
 
     [Table(Name = "Images")]
@@ -258,6 +278,9 @@ namespace WikiTasks
             if (!m.Success)
                 return ProcessStatus.NoFlickrLink;
 
+            if (image.Title.Contains('"'))
+                return ProcessStatus.FilenameWithQuotes;
+
             long id = long.Parse(m.Groups[1].Value);
             WebClient wc = new WebClient();
             flickrDelay.Wait();
@@ -292,7 +315,16 @@ namespace WikiTasks
                 if (width <= image.Width || height <= image.Height)
                     return ProcessStatus.NoHigherResolution;
 
-                byte[] commonsFileData = wc.DownloadData(image.CommonsUrl);
+                byte[] commonsFileData = null;
+                try
+                {
+                    commonsFileData = wc.DownloadData(image.CommonsUrl);
+                }
+                catch (WebException)
+                {
+                    return ProcessStatus.CommonsDownloadError;
+                }
+
                 flickrDelay.Wait();
                 byte[] flickrFileData = wc.DownloadData(source);
 
@@ -308,6 +340,11 @@ namespace WikiTasks
                 var fms = new MemoryStream(flickrFileData);
                 var fi = System.Drawing.Image.FromStream(fms);
                 ExifRotate.RotateImageByExifOrientationData(fi);
+                if (fi.Width != image.OriginalWidth || fi.Height != image.OriginalHeight)
+                    return ProcessStatus.FlickrSizeMismatch;
+
+                if (!ci.RawFormat.Equals(fi.RawFormat))
+                    return ProcessStatus.ImageFormatMismatch;
 
                 var rfi = ImageDiff.ResizeImage(fi, ci.Width, ci.Height);
                 double maxDeltaE = ImageDiff.GetMaxDeltaE((Bitmap)ci, rfi);
@@ -320,26 +357,71 @@ namespace WikiTasks
                     return ProcessStatus.ImagesNotEqual;
                 }
 
+                flickrDelay.Wait();
+                xml = wc.DownloadString(
+                    "https://api.flickr.com/services/rest/" +
+                    "?method=flickr.photos.getInfo" +
+                    "&api_key=" + flickrKey +
+                    "&photo_id=" + id);
+
+                doc.LoadXml(xml);
+                rspNode = doc.SelectSingleNode("/rsp");
+                if (rspNode.Attributes["stat"].InnerText == "fail")
+                    throw new Exception();
+
+                var photoNode = rspNode.SelectSingleNode("photo");
+                var license = (FlickrLicense)int.Parse(photoNode.Attributes["license"].InnerText);
+                switch (license)
+                {
+                    case FlickrLicense.Attribution:
+                    case FlickrLicense.AttributionShareAlike:
+                    case FlickrLicense.PublicDomainDedication:
+                    case FlickrLicense.PublicDomainMark:
+                        break;
+                    default:
+                        return ProcessStatus.NonFreeLicense;
+                }
+
                 string fileName = image.Title;
                 if (!fileName.StartsWith("File:"))
                     throw new Exception();
                 fileName = fileName.Substring(5);
 
-                commonsDelay.Wait();
-                string result = api.PostRequest(
-                    "action", "upload",
-                    "ignorewarnings", "true",
-                    "filename", fileName,
-                    "filesize", flickrFileData.Length.ToString(),
-                    "file", new MwApi.FileInfo { Data = flickrFileData, Name = fileName },
-                    "comment", "Uploading higher resolution from Flickr",
-                    "token", csrfToken,
-                    "format", "xml");
+                for (;;)
+                {
+                    commonsDelay.Wait();
+                    string result = api.PostRequest(
+                        "action", "upload",
+                        "ignorewarnings", "true",
+                        "filename", fileName,
+                        "filesize", flickrFileData.Length.ToString(),
+                        "file", new MwApi.FileInfo { Data = flickrFileData, Name = fileName },
+                        "comment", "Uploading higher resolution from Flickr",
+                        "token", csrfToken,
+                        "format", "xml");
 
-                doc.LoadXml(result);
+                    if (result.Contains("Wikimedia error"))
+                        return ProcessStatus.WikimediaError;
+
+                    doc.LoadXml(result);
+                    var errorNode = doc.SelectSingleNode("/api/error");
+                    if (errorNode != null)
+                    {
+                        string errCode = errorNode.Attributes["code"].InnerText;
+                        switch (errCode)
+                        {
+                            case "abusefilter-warning":
+                            case "readonly":
+                                continue;
+                            default:
+                                throw new Exception();
+                        }
+                    }
+                    break;
+                }
                 var uploadNode = doc.SelectSingleNode("/api/upload");
                 if (uploadNode.Attributes["result"].InnerText != "Success")
-                    return ProcessStatus.CommonsUploadFailed;
+                    throw new Exception();
                 var iiNode = uploadNode.SelectSingleNode("imageinfo");
                 if (!iiNode.Attributes["html"].InnerText.Contains("Файл с этим именем уже существует"))
                     throw new Exception();
@@ -381,6 +463,9 @@ namespace WikiTasks
                         break;
                     case ProcessStatus.ImagesNotEqual:
                         statusChar = '!';
+                        break;
+                    case ProcessStatus.NonFreeLicense:
+                        statusChar = '@';
                         break;
                 }
                 image.Status = statusCode;
