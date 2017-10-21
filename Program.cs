@@ -28,7 +28,8 @@ namespace WikiTasks
         FlickrSizeMismatch = 11,
         ImageFormatMismatch = 12,
         CommonsDownloadError = 13,
-        NonFreeLicense = 14
+        NonFreeLicense = 14,
+        CommonsVerificationError = 15
     }
 
     public enum FlickrLicense
@@ -272,6 +273,27 @@ namespace WikiTasks
             Console.WriteLine(" Done");
         }
 
+        string FlickrApiRequest(string parameters)
+        {
+            WebClient wc = new WebClient();
+            for (;;)
+            {
+                flickrDelay.Wait();
+                try
+                {
+                    string result = wc.DownloadString(
+                        "https://api.flickr.com/services/rest/?" +
+                        parameters);
+                    if (result.Contains("Flickr API service is not currently available"))
+                        continue;
+                    return result;
+                }
+                catch (WebException)
+                {
+                }
+            }
+        }
+
         ProcessStatus ProcessImageEntry(Image image)
         {
             var m = Regex.Match(image.Comment, "/([0-9]+) using ");
@@ -282,11 +304,8 @@ namespace WikiTasks
                 return ProcessStatus.FilenameWithQuotes;
 
             long id = long.Parse(m.Groups[1].Value);
-            WebClient wc = new WebClient();
-            flickrDelay.Wait();
-            string xml = wc.DownloadString(
-                "https://api.flickr.com/services/rest/" +
-                "?method=flickr.photos.getSizes" +
+            string xml = FlickrApiRequest(
+                "method=flickr.photos.getSizes" +
                 "&api_key=" + flickrKey +
                 "&photo_id=" + id);
             XmlDocument doc = new XmlDocument();
@@ -315,6 +334,7 @@ namespace WikiTasks
                 if (width <= image.Width || height <= image.Height)
                     return ProcessStatus.NoHigherResolution;
 
+                WebClient wc = new WebClient();
                 byte[] commonsFileData = null;
                 try
                 {
@@ -357,13 +377,10 @@ namespace WikiTasks
                     return ProcessStatus.ImagesNotEqual;
                 }
 
-                flickrDelay.Wait();
-                xml = wc.DownloadString(
-                    "https://api.flickr.com/services/rest/" +
-                    "?method=flickr.photos.getInfo" +
+                xml = FlickrApiRequest(
+                    "method=flickr.photos.getInfo" +
                     "&api_key=" + flickrKey +
                     "&photo_id=" + id);
-
                 doc.LoadXml(xml);
                 rspNode = doc.SelectSingleNode("/rsp");
                 if (rspNode.Attributes["stat"].InnerText == "fail")
@@ -400,7 +417,7 @@ namespace WikiTasks
                         "token", csrfToken,
                         "format", "xml");
 
-                    if (result.Contains("Wikimedia error"))
+                    if (result.ToLower().Contains("wikimedia error"))
                         return ProcessStatus.WikimediaError;
 
                     doc.LoadXml(result);
@@ -412,7 +429,10 @@ namespace WikiTasks
                         {
                             case "abusefilter-warning":
                             case "readonly":
+                            case "backend-fail-synced":
                                 continue;
+                            case "verification-error":
+                                return ProcessStatus.CommonsVerificationError;
                             default:
                                 throw new Exception();
                         }
