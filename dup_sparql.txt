@@ -1,0 +1,4 @@
+SELECT ?river (COUNT(?val) AS ?count) {
+  ?river wdt:P625 ?val .
+  ?river wdt:P31 wd:Q4022
+} GROUP BY ?river HAVING ( ?count > 1 )

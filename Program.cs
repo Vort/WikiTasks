@@ -2,13 +2,11 @@
 using LinqToDB.Mapping;
 using System;
 using System.Collections.Generic;
-using System.Drawing;
 using System.IO;
 using System.Linq;
-using System.Net;
-using System.Text.RegularExpressions;
-using System.Threading;
 using System.Xml;
+using Newtonsoft.Json.Linq;
+using System.Globalization;
 
 namespace WikiTasks
 {
@@ -16,115 +14,282 @@ namespace WikiTasks
     {
         NotProcessed = 0,
         Success = 1,
-        NoHigherResolution = 2,
-        NoFlickrLink = 3,
-        OriginalNotFound = 4,
-        ImagesNotEqual = 5,
-        CommonsSizeMismatch = 6,
-        FlickrErrorUnknown = 7,
-        FlickrErrorNotFound = 8,
-        WikimediaError = 9,
-        FilenameWithQuotes = 10,
-        FlickrSizeMismatch = 11,
-        ImageFormatMismatch = 12,
-        CommonsDownloadError = 13,
-        NonFreeLicense = 14,
-        CommonsVerificationError = 15
+        Failure = 2
     }
 
-    public enum FlickrLicense
-    {
-        AllRightsReserved = 0,
-        AttributionNonCommercialShareAlike = 1,
-        AttributionNonCommercial = 2,
-        AttributionNonCommercialNoDerivs = 3,
-        Attribution = 4,
-        AttributionShareAlike = 5,
-        AttributionNoDerivs = 6,
-        NoKnownCopyrightRestrictions = 7,
-        UnitedStatesGovernmentWork = 8,
-        PublicDomainDedication = 9,
-        PublicDomainMark = 10
-    }
-
-    [Table(Name = "Images")]
-    public class Image
+    [Table(Name = "Items")]
+    public class DbItem
     {
         [PrimaryKey]
-        public int PageId;
+        public int Id;
         [Column()]
-        public string Title;
+        public string SrcData;
         [Column()]
-        public string CommonsUrl;
-        [Column()]
-        public bool SingleRev;
-        [Column()]
-        public int Size;
-        [Column()]
-        public int Width;
-        [Column()]
-        public int Height;
-        [Column()]
-        public string Comment;
+        public string ReplData;
         [Column()]
         public ProcessStatus Status;
-        [Column()]
-        public double MaxDeltaE;
-        [Column()]
-        public int OriginalWidth;
-        [Column()]
-        public int OriginalHeight;
     };
-    
+
     public class Db : LinqToDB.Data.DataConnection
     {
         public Db() : base("Db") { }
 
-        public ITable<Image> Images { get { return GetTable<Image>(); } }
+        public ITable<DbItem> Items { get { return GetTable<DbItem>(); } }
     }
 
-    class Delay
+    class Snak
     {
-        int msecDuration;
-        DateTime waitTill;
-
-        public Delay(int msecDuration)
+        public Snak(JObject obj)
         {
-            this.msecDuration = msecDuration;
+            SnakType = (string)obj["snaktype"];
+            Property = new PId((string)obj["property"]);
+            Hash = (string)obj["hash"];
+            DataType = (string)obj["datatype"];
+            if (SnakType == "value")
+            {
+                DataValue = (JObject)obj["datavalue"];
+                if (obj.Count != 5)
+                    throw new Exception();
+            }
+            else
+            {
+                if (obj.Count != 4)
+                    throw new Exception();
+            }
         }
 
-        public void Wait()
+        public JObject ToJObject()
         {
-            int delay = (int)(waitTill - DateTime.Now).TotalMilliseconds;
-            if (delay > 0)
-                Thread.Sleep(delay);
-            waitTill = DateTime.Now.AddMilliseconds(msecDuration);
+            var o = new JObject();
+            o["snaktype"] = SnakType;
+            o["property"] = Property.ToString();
+            o["hash"] = Hash;
+            if (SnakType == "value")
+                o["datavalue"] = DataValue;
+            o["datatype"] = DataType;
+            return o;
+        }
+
+        public string SnakType;
+        public PId Property;
+        public string Hash;
+        public JObject DataValue;
+        public string DataType;
+    }
+
+    class Claim
+    {
+        public Claim(JObject obj)
+        {
+            foreach (var t in obj)
+            {
+                if (t.Key == "id")
+                    Id = (string)t.Value;
+                else if (t.Key == "rank")
+                    Rank = (string)t.Value;
+                else if (t.Key == "mainsnak")
+                    MainSnak = new Snak((JObject)t.Value);
+                else if (t.Key == "references")
+                    References = ((JArray)t.Value).Select(x => (JObject)x).ToArray();
+                else if (t.Key == "qualifiers")
+                    Qualifiers = (JObject)t.Value;
+                else if (t.Key == "qualifiers-order")
+                    QualifiersOrder = ((JArray)t.Value).Select(x => (string)x).ToArray();
+                else if (t.Key == "type")
+                {
+                    if ((string)t.Value != "statement")
+                        throw new Exception();
+                }
+                else
+                    throw new Exception();
+            }
+        }
+
+        public JObject ToJObject()
+        {
+            var o = new JObject();
+            o["id"] = Id;
+            o["rank"] = Rank;
+            o["type"] = "statement";
+            o["mainsnak"] = MainSnak.ToJObject();
+            if (Qualifiers != null)
+            {
+                o["qualifiers"] = Qualifiers;
+                o["qualifiers-order"] = JArray.FromObject(QualifiersOrder);
+            }
+            if (References != null)
+                o["references"] = JArray.FromObject(References);
+            return o;
+        }
+
+
+        public Snak MainSnak;
+        public string Id;
+        public string Rank;
+        public JObject Qualifiers;
+        public string[] QualifiersOrder;
+        public JObject[] References;
+    }
+
+    class Item
+    {
+        public Item(string json)
+        {
+            var o = JObject.Parse(json);
+            if (o.Count != 12)
+                throw new Exception();
+            if ((int)o["ns"] != 0)
+                throw new Exception();
+            if ((string)o["type"] != "item")
+                throw new Exception();
+            Id = new QId((string)o["id"]);
+            if ((string)o["title"] != Id.ToString())
+                throw new Exception();
+            PageId = (int)o["pageid"];
+            LastRevId = (long)o["lastrevid"];
+            Modified = (DateTime)o["modified"];
+
+            Labels = o["labels"].ToDictionary(
+                t => ((JProperty)t).Name,
+                t => (string)((JProperty)t).Value["value"]);
+            Descriptions = o["descriptions"].ToDictionary(
+                t => ((JProperty)t).Name,
+                t => (string)((JProperty)t).Value["value"]);
+            Aliases = (JObject)o["aliases"];
+            Sitelinks = (JObject)o["sitelinks"];
+
+            Claims = o["claims"].ToDictionary(
+                t => new PId(((JProperty)t).Name),
+                t => ((JArray)((JProperty)t).Value).
+                    Select(c => new Claim((JObject)c)).ToArray());
+        }
+
+        public override string ToString()
+        {
+            var o = new JObject();
+            o["ns"] = 0;
+            o["type"] = "item";
+            o["pageid"] = PageId;
+            o["title"] = Id.ToString();
+            o["lastrevid"] = LastRevId;
+            o["modified"] = Modified;
+            o["id"] = Id.ToString();
+            o["labels"] = JObject.FromObject(Labels.ToDictionary(kv => kv.Key,
+                kv => new JObject { { "language", kv.Key }, { "value", kv.Value } }));
+            o["descriptions"] = JObject.FromObject(Descriptions.ToDictionary(kv => kv.Key,
+                kv => new JObject { { "language", kv.Key }, { "value", kv.Value } }));
+            o["aliases"] = Aliases;
+            o["sitelinks"] = Sitelinks;
+
+            o["claims"] = JObject.FromObject(Claims.ToDictionary(kv => kv.Key,
+                kv => kv.Value.Select(c => c.ToJObject())));
+
+            return o.ToString();
+        }
+
+        public int PageId;
+        public long LastRevId;
+        public DateTime Modified;
+        public QId Id;
+
+        public Dictionary<string, string> Labels;
+        public Dictionary<string, string> Descriptions;
+        public JObject Aliases;
+        public Dictionary<PId, Claim[]> Claims;
+        public JObject Sitelinks;
+    }
+
+
+    abstract class WdId
+    {
+        public WdId(char c, int id)
+        {
+            if (id < 1)
+                throw new Exception();
+
+            Id = id;
+            this.c = c;
+        }
+
+        public WdId(char c, string id)
+        {
+            if (id[0] != c)
+                throw new Exception();
+
+            int idi = int.Parse(id.Substring(1));
+            if (idi < 1)
+                throw new Exception();
+
+            Id = idi;
+            this.c = c;
+        }
+
+        public override string ToString()
+        {
+            return c + Id.ToString();
+        }
+
+        private readonly char c;
+        public readonly int Id;
+    }
+
+    class QId : WdId
+    {
+        public QId(int id) : base('Q', id)
+        {
+        }
+
+        public QId(string id) : base('Q', id)
+        {
         }
     }
+
+    class PId : WdId, IEquatable<PId>
+    {
+        public PId(int id) : base('P', id)
+        {
+        }
+
+        public PId(string id) : base('P', id)
+        {
+        }
+
+        public override int GetHashCode()
+        {
+            return Id;
+        }
+
+        public override bool Equals(object obj)
+        {
+            return Equals(obj as PId);
+        }
+
+        public bool Equals(PId obj)
+        {
+            return obj != null && obj.Id == Id;
+        }
+    }
+
 
     class Program
     {
         MwApi api;
         static Db db;
-        string flickrKey;
-
-        Delay commonsDelay;
-        Delay flickrDelay;
 
         string csrfToken;
 
-        List<List<int>> SplitToChunks(List<int> ids, int chunkSize)
+        List<List<QId>> SplitToChunks(QId[] ids, int chunkSize)
         {
-            int chunkCount = (ids.Count + chunkSize - 1) / chunkSize;
+            int chunkCount = (ids.Length + chunkSize - 1) / chunkSize;
 
-            List<List<int>> chunks = new List<List<int>>();
+            var chunks = new List<List<QId>>();
             for (int i = 0; i < chunkCount; i++)
             {
-                List<int> chunk = new List<int>();
+                var chunk = new List<QId>();
                 for (int j = 0; j < chunkSize; j++)
                 {
                     int k = i * chunkSize + j;
-                    if (k >= ids.Count)
+                    if (k >= ids.Length)
                         break;
                     chunk.Add(ids[k]);
                 }
@@ -169,340 +334,167 @@ namespace WikiTasks
                 GetSchema(db).Tables.Any(t => t.TableName == name);
         }
 
-        void GetImageList()
+        QId[] GetIds()
         {
-            if (HaveTable("Images"))
-                db.DropTable<Image>();
-            db.CreateTable<Image>();
-            
-            string category = "Category:Flickr images uploaded by Flickr upload bot";
+            string[] ids = SparqlApi.GetItemIds(
+                SparqlApi.RunWikidataQuery("dup_sparql.txt"), "river");
+            return ids.Select(i => new QId(i)).ToArray();
+        }
 
-            string continueParam = "";
-            Console.Write("Scanning category...");
-            for (;;)
+        void GetItems(QId[] ids)
+        {
+            if (HaveTable("Items"))
+                db.DropTable<DbItem>();
+            db.CreateTable<DbItem>();
+
+            Console.Write("Downloading items");
+            var chunks = SplitToChunks(ids, 50);
+            foreach (var chunk in chunks)
             {
-                string xml = api.PostRequest(
-                    "action", "query",
-                    "list", "categorymembers",
-                    "format", "xml",
-                    "cmprop", "ids",
-                    "cmtitle", category,
-                    "cmlimit", "500",
-                    "cmcontinue", continueParam);
+                string json = api.PostRequest(
+                    "action", "wbgetentities",
+                    "format", "json",
+                    "ids", string.Join<QId>("|", chunk),
+                    "redirects", "no");
                 Console.Write('.');
 
-                XmlDocument doc = new XmlDocument();
-                doc.LoadXml(xml);
+                var obj = JObject.Parse(json);
 
-                db.BeginTransaction();
-                foreach (XmlNode pNode in doc.SelectNodes("/api/query/categorymembers/cm"))
-                {
-                    int id = int.Parse(pNode.Attributes["pageid"].InnerText);
-                    db.Insert(new Image() { PageId = id });
-                }
-                db.CommitTransaction();
-
-                XmlNode contNode = doc.SelectSingleNode("/api/continue");
-                if (contNode == null)
-                    break;
-                continueParam = contNode.Attributes["cmcontinue"].InnerText;
-            }
-            Console.WriteLine(" Done");
-        }
-
-        List<Image> ParseImageInfos(string xml)
-        {
-            List<Image> images = new List<Image>();
-
-            XmlDocument doc = new XmlDocument();
-            doc.LoadXml(xml);
-
-            foreach (XmlNode pageNode in doc.SelectNodes("/api/query/pages/page"))
-            {
-                if (pageNode.Attributes["missing"] != null)
-                    continue;
-
-                Image image = new Image();
-                image.Title = pageNode.Attributes["title"].InnerText;
-                image.PageId = int.Parse(pageNode.Attributes["pageid"].InnerText);
-
-                XmlNodeList iiNodes = pageNode.SelectNodes("imageinfo/ii");
-                image.SingleRev = iiNodes.Count == 1;
-                if (image.SingleRev)
-                {
-                    var iiNode = iiNodes.Item(0);
-                    image.Size = int.Parse(iiNode.Attributes["size"].InnerText);
-                    image.Width = int.Parse(iiNode.Attributes["width"].InnerText);
-                    image.Height = int.Parse(iiNode.Attributes["height"].InnerText);
-                    image.Comment = iiNode.Attributes["comment"].InnerText;
-                    image.CommonsUrl = iiNode.Attributes["url"].InnerText;
-                }
-
-                images.Add(image);
-            }
-
-            return images;
-        }
-
-        void GetImageInfo()
-        {
-            if (!HaveTable("Images"))
-                throw new Exception();
-
-            Console.Write("Retrieving image info");
-            var updChunks = SplitToChunks(
-                db.Images.Where(i => i.Title == null).Select(i => i.PageId).ToList(), 50);
-            foreach (List<int> chunk in updChunks)
-            {
-                string idss = string.Join("|", chunk);
-                string xml = api.PostRequest(
-                    "action", "query",
-                    "prop", "imageinfo",
-                    "iiprop", "size|comment|url",
-                    "iilimit", "2",
-                    "format", "xml",
-                    "pageids", idss);
-                Console.Write('.');
-
-                List<Image> images = ParseImageInfos(xml);
-                db.BeginTransaction();
-                foreach (Image i in images)
-                    db.Update(i);
-                db.CommitTransaction();
-            }
-            Console.WriteLine(" Done");
-        }
-
-        string FlickrApiRequest(string parameters)
-        {
-            WebClient wc = new WebClient();
-            for (;;)
-            {
-                flickrDelay.Wait();
-                try
-                {
-                    string result = wc.DownloadString(
-                        "https://api.flickr.com/services/rest/?" +
-                        parameters);
-                    if (result.Contains("Flickr API service is not currently available"))
-                        continue;
-                    return result;
-                }
-                catch (WebException)
-                {
-                }
-            }
-        }
-
-        ProcessStatus ProcessImageEntry(Image image)
-        {
-            var m = Regex.Match(image.Comment, "/([0-9]+) using ");
-            if (!m.Success)
-                return ProcessStatus.NoFlickrLink;
-
-            if (image.Title.Contains('"'))
-                return ProcessStatus.FilenameWithQuotes;
-
-            long id = long.Parse(m.Groups[1].Value);
-            string xml = FlickrApiRequest(
-                "method=flickr.photos.getSizes" +
-                "&api_key=" + flickrKey +
-                "&photo_id=" + id);
-            XmlDocument doc = new XmlDocument();
-            doc.LoadXml(xml);
-            var rspNode = doc.SelectSingleNode("/rsp");
-            if (rspNode.Attributes["stat"].InnerText == "fail")
-            {
-                var errNode = rspNode.SelectSingleNode("err");
-                int errCode = int.Parse(errNode.Attributes["code"].InnerText);
-                if (errCode == 1)
-                    return ProcessStatus.FlickrErrorNotFound;
-                else
-                    return ProcessStatus.FlickrErrorUnknown;
-            }
-
-            foreach (XmlNode sizeNode in doc.SelectNodes("/rsp/sizes/size"))
-            {
-                if (sizeNode.Attributes["label"].InnerText != "Original")
-                    continue;
-
-                int width = int.Parse(sizeNode.Attributes["width"].InnerText);
-                int height = int.Parse(sizeNode.Attributes["height"].InnerText);
-                string source = sizeNode.Attributes["source"].InnerText;
-                image.OriginalWidth = width;
-                image.OriginalHeight = height;
-                if (width <= image.Width || height <= image.Height)
-                    return ProcessStatus.NoHigherResolution;
-
-                WebClient wc = new WebClient();
-                byte[] commonsFileData = null;
-                try
-                {
-                    commonsFileData = wc.DownloadData(image.CommonsUrl);
-                }
-                catch (WebException)
-                {
-                    return ProcessStatus.CommonsDownloadError;
-                }
-
-                flickrDelay.Wait();
-                byte[] flickrFileData = wc.DownloadData(source);
-
-                var cms = new MemoryStream(commonsFileData);
-                var ci = System.Drawing.Image.FromStream(cms);
-                ExifRotate.RotateImageByExifOrientationData(ci);
-                if (commonsFileData.Length != image.Size ||
-                    ci.Width != image.Width || ci.Height != image.Height)
-                {
-                    return ProcessStatus.CommonsSizeMismatch;
-                }
-
-                var fms = new MemoryStream(flickrFileData);
-                var fi = System.Drawing.Image.FromStream(fms);
-                ExifRotate.RotateImageByExifOrientationData(fi);
-                if (fi.Width != image.OriginalWidth || fi.Height != image.OriginalHeight)
-                    return ProcessStatus.FlickrSizeMismatch;
-
-                if (!ci.RawFormat.Equals(fi.RawFormat))
-                    return ProcessStatus.ImageFormatMismatch;
-
-                var rfi = ImageDiff.ResizeImage(fi, ci.Width, ci.Height);
-                double maxDeltaE = ImageDiff.GetMaxDeltaE((Bitmap)ci, rfi);
-
-                image.MaxDeltaE = Math.Round(maxDeltaE, 2);
-                if (maxDeltaE > 45.0)
-                {
-                    File.WriteAllBytes($"images\\{image.PageId}_c.jpeg", commonsFileData);
-                    File.WriteAllBytes($"images\\{image.PageId}_f.jpeg", flickrFileData);
-                    return ProcessStatus.ImagesNotEqual;
-                }
-
-                xml = FlickrApiRequest(
-                    "method=flickr.photos.getInfo" +
-                    "&api_key=" + flickrKey +
-                    "&photo_id=" + id);
-                doc.LoadXml(xml);
-                rspNode = doc.SelectSingleNode("/rsp");
-                if (rspNode.Attributes["stat"].InnerText == "fail")
+                if (obj.Count != 2)
                     throw new Exception();
-
-                var photoNode = rspNode.SelectSingleNode("photo");
-                var license = (FlickrLicense)int.Parse(photoNode.Attributes["license"].InnerText);
-                switch (license)
-                {
-                    case FlickrLicense.Attribution:
-                    case FlickrLicense.AttributionShareAlike:
-                    case FlickrLicense.PublicDomainDedication:
-                    case FlickrLicense.PublicDomainMark:
-                        break;
-                    default:
-                        return ProcessStatus.NonFreeLicense;
-                }
-
-                string fileName = image.Title;
-                if (!fileName.StartsWith("File:"))
+                if ((int)obj["success"] != 1)
                     throw new Exception();
-                fileName = fileName.Substring(5);
-
-                for (;;)
+                if (!obj["entities"].All(t => t is JProperty))
+                    throw new Exception();
+                db.BeginTransaction();
+                foreach (JToken t in obj["entities"])
                 {
-                    commonsDelay.Wait();
-                    string result = api.PostRequest(
-                        "action", "upload",
-                        "ignorewarnings", "true",
-                        "filename", fileName,
-                        "filesize", flickrFileData.Length.ToString(),
-                        "file", new MwApi.FileInfo { Data = flickrFileData, Name = fileName },
-                        "comment", "Uploading higher resolution from Flickr",
-                        "token", csrfToken,
-                        "format", "xml");
-
-                    if (result.ToLower().Contains("wikimedia error"))
-                        return ProcessStatus.WikimediaError;
-
-                    doc.LoadXml(result);
-                    var errorNode = doc.SelectSingleNode("/api/error");
-                    if (errorNode != null)
+                    var kv = t as JProperty;
+                    db.Insert(new DbItem
                     {
-                        string errCode = errorNode.Attributes["code"].InnerText;
-                        switch (errCode)
-                        {
-                            case "abusefilter-warning":
-                            case "readonly":
-                            case "backend-fail-synced":
-                                continue;
-                            case "verification-error":
-                                return ProcessStatus.CommonsVerificationError;
-                            default:
-                                throw new Exception();
-                        }
-                    }
-                    break;
+                        Id = new QId(kv.Name).Id,
+                        SrcData = kv.Value.ToString()
+                    });
                 }
-                var uploadNode = doc.SelectSingleNode("/api/upload");
-                if (uploadNode.Attributes["result"].InnerText != "Success")
-                    throw new Exception();
-                var iiNode = uploadNode.SelectSingleNode("imageinfo");
-                if (!iiNode.Attributes["html"].InnerText.Contains("Файл с этим именем уже существует"))
-                    throw new Exception();
-
-                return ProcessStatus.Success;
+                db.CommitTransaction();
             }
-
-            return ProcessStatus.OriginalNotFound;
+            Console.WriteLine(" Done");
         }
 
-        void CheckAndReplace()
+        public static double DegToRad(double degrees)
         {
-            if (!Directory.Exists("images"))
-                Directory.CreateDirectory("images");
+            return degrees * Math.PI / 180.0;
+        }
 
-            if (!HaveTable("Images"))
-                throw new Exception();
+        public static double Distance(double lat1, double lon1, double lat2, double lon2)
+        {
+            double r = 6371000.0;
+            double lat1rad = DegToRad(lat1);
+            double lat2rad = DegToRad(lat2);
+            double deltaLatRad = DegToRad(lat2 - lat1);
+            double deltaLonRad = DegToRad(lon2 - lon1);
 
-            Console.Write("Checking and replacing...");
+            double a = Math.Sin(deltaLatRad / 2) * Math.Sin(deltaLatRad / 2) +
+                Math.Cos(lat1rad) * Math.Cos(lat2rad) *
+                Math.Sin(deltaLonRad / 2) * Math.Sin(deltaLonRad / 2);
+            double c = 2 * Math.Atan2(Math.Sqrt(a), Math.Sqrt(1 - a));
 
-            flickrKey = File.ReadAllText("flickr_key.txt");
+            return r * c;
+        }
 
-            commonsDelay = new Delay(5000);
-            flickrDelay = new Delay(1000);
+        void GetCoord(Claim c, out double lat, out double lon)
+        {
+            var o = c.MainSnak.DataValue["value"];
+            lat = double.Parse((string)o["latitude"], CultureInfo.InvariantCulture);
+            lon = double.Parse((string)o["longitude"], CultureInfo.InvariantCulture);
+        }
 
-            var images = db.Images.Where(i => i.SingleRev &&
-                i.Status == ProcessStatus.NotProcessed).ToArray();
-            foreach (var image in images)
+        void FillReplData()
+        {
+            var dba = db.Items.ToArray();
+            db.BeginTransaction();
+            foreach (var dbi in dba)
             {
-                char statusChar = 'x';
-                var statusCode = ProcessImageEntry(image);
-                switch (statusCode)
-                {
-                    case ProcessStatus.Success:
-                        statusChar = '+';
-                        break;
-                    case ProcessStatus.NoHigherResolution:
-                        statusChar = '-';
-                        break;
-                    case ProcessStatus.ImagesNotEqual:
-                        statusChar = '!';
-                        break;
-                    case ProcessStatus.NonFreeLicense:
-                        statusChar = '@';
-                        break;
-                }
-                image.Status = statusCode;
-                db.Update(image);
-                Console.Write(statusChar);
-            }
+                var i = new Item(dbi.SrcData);
+                var json2 = i.ToString();
+                if (!JToken.DeepEquals(JObject.Parse(json2), JObject.Parse(dbi.SrcData)))
+                    throw new Exception();
 
+                var p625 = i.Claims[new PId(625)];
+                var t1 = p625.Where(c => c.Qualifiers == null && c.References == null).ToArray();
+                if (t1.Length != 1)
+                    continue;
+                var c1 = t1[0];
+
+                double c1lat;
+                double c1lon;
+
+                GetCoord(c1, out c1lat, out c1lon);
+
+                foreach (var c2 in p625)
+                {
+                    if (c2.Id == c1.Id)
+                        continue;
+
+                    double c2lat;
+                    double c2lon;
+
+                    GetCoord(c2, out c2lat, out c2lon);
+
+                    double d = Distance(c1lat, c1lon, c2lat, c2lon);
+                    if (d < 0.1)
+                    {
+                        i.Claims[new PId(625)] = p625.Where(c => c.Id != c1.Id).ToArray();
+                        dbi.ReplData = i.ToString();
+                        db.Update(dbi);
+                        break;
+                    }
+                }
+            }
+            db.CommitTransaction();
+        }
+
+        bool UpdateEntity(Item item, string summary)
+        {
+            string json = api.PostRequest(
+                "action", "wbeditentity",
+                "format", "json",
+                "id", item.Id.ToString(),
+                "baserevid", item.LastRevId.ToString(),
+                "summary", summary,
+                "token", csrfToken,
+                "bot", "1",
+                "data", item.ToString(),
+                "clear", "1");
+
+            var obj = JObject.Parse(json);
+            return obj["success"] != null;
+        }
+
+        void MakeReplacements()
+        {
+            Console.Write("Making replacements");
+            foreach (var dbi in db.Items.Where(i => i.Status == 0 && i.ReplData != null).Take(5).ToArray())
+            {
+                bool success = UpdateEntity(new Item(dbi.ReplData),
+                    "Remove duplicate coordinates (distance < 0.1m)");
+                dbi.Status = success ? ProcessStatus.Success : ProcessStatus.Failure;
+                Console.Write(success ? '.' : 'x');
+                db.Update(dbi);
+            }
             Console.WriteLine(" Done");
         }
 
         Program()
         {
-            api = new MwApi("commons.wikimedia.org");
+            api = new MwApi("www.wikidata.org");
             ObtainEditToken();
-            GetImageList();
-            GetImageInfo();
-            CheckAndReplace();
+
+            //GetItems(GetIds());
+
+            //FillReplData();
+
+            MakeReplacements();
         }
 
         static void Main(string[] args)
