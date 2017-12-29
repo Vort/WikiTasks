@@ -10,7 +10,7 @@ namespace WikiTasks
     class PetScanEntry
     {
         [JsonProperty(PropertyName = "title")]
-        public string ArticleTitle;
+        public string Title;
         [JsonProperty(PropertyName = "q")]
         public string WikidataItem;
     }
@@ -113,7 +113,14 @@ namespace WikiTasks
 
             var allParameters = new Dictionary<string, string>(defaultParameters);
             for (int i = 0; i < additionalParameters.Length / 2; i++)
-                allParameters[additionalParameters[i * 2]] = additionalParameters[i * 2 + 1];
+            {
+                var k = additionalParameters[i * 2];
+                var v = additionalParameters[i * 2 + 1];
+                if (v != null)
+                    allParameters[k] = v;
+                else
+                    allParameters.Remove(k);
+            }
 
             var postBody = string.Join("&", allParameters.Select(
                 p => UrlEncode(p.Key) + "=" + UrlEncode(p.Value)));

@@ -4,4 +4,6 @@
 /bin
 /obj
 /packages
+
+/.tools
 /LinqToDB.Templates
