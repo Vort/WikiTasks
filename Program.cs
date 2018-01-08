@@ -2,7 +2,6 @@
 using LinqToDB.Mapping;
 using System;
 using System.Collections.Generic;
-using System.IO;
 using System.Linq;
 using System.Xml;
 using Newtonsoft.Json.Linq;
@@ -161,7 +160,7 @@ namespace WikiTasks
             Claims = o["claims"].ToDictionary(
                 t => new PId(((JProperty)t).Name),
                 t => ((JArray)((JProperty)t).Value).
-                    Select(c => new Claim((JObject)c)).ToArray());
+                    Select(c => new Claim((JObject)c)).ToList());
         }
 
         public override string ToString()
@@ -195,7 +194,7 @@ namespace WikiTasks
         public Dictionary<string, string> Labels;
         public Dictionary<string, string> Descriptions;
         public JObject Aliases;
-        public Dictionary<PId, Claim[]> Claims;
+        public Dictionary<PId, List<Claim>> Claims;
         public JObject Sitelinks;
     }
 
@@ -411,47 +410,74 @@ namespace WikiTasks
 
         void FillReplData()
         {
-            var dba = db.Items.ToArray();
+            int replCnt = 0;
+            int nullPrec = 0;
+
+            var dba = db.Items.Where(dbi => dbi.Status == ProcessStatus.NotProcessed).ToArray();
             db.BeginTransaction();
             foreach (var dbi in dba)
             {
-                var i = new Item(dbi.SrcData);
-                var json2 = i.ToString();
+                var item = new Item(dbi.SrcData);
+                var json2 = item.ToString();
                 if (!JToken.DeepEquals(JObject.Parse(json2), JObject.Parse(dbi.SrcData)))
                     throw new Exception();
 
-                var p625 = i.Claims[new PId(625)];
-                var t1 = p625.Where(c => c.Qualifiers == null && c.References == null).ToArray();
-                if (t1.Length != 1)
-                    continue;
-                var c1 = t1[0];
+                var p625 = item.Claims[new PId(625)];
 
-                double c1lat;
-                double c1lon;
-
-                GetCoord(c1, out c1lat, out c1lon);
-
-                foreach (var c2 in p625)
+                bool modified;
+                bool modifiedOnce = false;
+                for (;;)
                 {
-                    if (c2.Id == c1.Id)
-                        continue;
+                    modified = false;
 
-                    double c2lat;
-                    double c2lon;
-
-                    GetCoord(c2, out c2lat, out c2lon);
-
-                    double d = Distance(c1lat, c1lon, c2lat, c2lon);
-                    if (d < 0.1)
+                    foreach (var c1 in p625.Where(c => 
+                        c.Qualifiers == null && c.References == null))
                     {
-                        i.Claims[new PId(625)] = p625.Where(c => c.Id != c1.Id).ToArray();
-                        dbi.ReplData = i.ToString();
-                        db.Update(dbi);
-                        break;
+                        double c1lat;
+                        double c1lon;
+
+                        GetCoord(c1, out c1lat, out c1lon);
+
+                        foreach (var c2 in p625.Where(c => c.Id != c1.Id))
+                        {
+                            double c2lat;
+                            double c2lon;
+
+                            GetCoord(c2, out c2lat, out c2lon);
+
+                            double d = Distance(c1lat, c1lon, c2lat, c2lon);
+                            if (d < 0.1)
+                            {
+                                p625.RemoveAll(c => c.Id == c1.Id);
+                                modifiedOnce = true;
+                                modified = true;
+                                break;
+                            }
+                        }
+                        if (modified)
+                            break;
                     }
+
+                    if (!modified)
+                        break;
                 }
+
+                if (modifiedOnce)
+                {
+                    if (!p625.Any(c => c.MainSnak.DataValue["value"]["precision"].Type == JTokenType.Null))
+                    {
+                        dbi.ReplData = item.ToString();
+                        db.Update(dbi);
+                        replCnt++;
+                    }
+                    else
+                        nullPrec++;
+                }
+
             }
             db.CommitTransaction();
+            Console.WriteLine($"Replacements: {replCnt}");
+            Console.WriteLine($"Null precision: {nullPrec}");
         }
 
         bool UpdateEntity(Item item, string summary)
@@ -474,7 +500,7 @@ namespace WikiTasks
         void MakeReplacements()
         {
             Console.Write("Making replacements");
-            foreach (var dbi in db.Items.Where(i => i.Status == 0 && i.ReplData != null).Take(5).ToArray())
+            foreach (var dbi in db.Items.Where(i => i.Status == 0 && i.ReplData != null).Take(10).ToArray())
             {
                 bool success = UpdateEntity(new Item(dbi.ReplData),
                     "Remove duplicate coordinates (distance < 0.1m)");
