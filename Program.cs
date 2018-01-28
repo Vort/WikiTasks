@@ -5,7 +5,6 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Xml;
 using Newtonsoft.Json.Linq;
-using System.Globalization;
 
 namespace WikiTasks
 {
@@ -36,6 +35,183 @@ namespace WikiTasks
         public ITable<DbItem> Items { get { return GetTable<DbItem>(); } }
     }
 
+    class MonolingualText
+    {
+        public MonolingualText(JObject obj)
+        {
+            Obj = obj;
+        }
+
+        public JObject ToJObject()
+        {
+            return Obj;
+        }
+
+        public JObject Obj;
+    }
+
+    class Time
+    {
+        public Time(JObject obj)
+        {
+            Obj = obj;
+        }
+
+        public JObject ToJObject()
+        {
+            return Obj;
+        }
+
+        public JObject Obj;
+    }
+
+    class Quantity
+    {
+        public Quantity(JObject obj)
+        {
+            Obj = obj;
+        }
+
+        public JObject ToJObject()
+        {
+            return Obj;
+        }
+
+        public JObject Obj;
+    }
+
+    class EntityId
+    {
+        public EntityId(JObject obj)
+        {
+            Obj = obj;
+        }
+
+        public JObject ToJObject()
+        {
+            return Obj;
+        }
+
+        public JObject Obj;
+    }
+
+    class Coordinate
+    {
+        public Coordinate(JObject obj)
+        {
+            if (obj.Count != 5)
+                throw new Exception();
+            if (obj["altitude"].Type != JTokenType.Null)
+                throw new Exception();
+            Globe = (string)obj["globe"];
+            Latitude = (double)obj["latitude"];
+            Longitude = (double)obj["longitude"];
+            Precision = (double?)obj["precision"];
+        }
+
+        public JObject ToJObject()
+        {
+            var o = new JObject();
+            o["altitude"] = JValue.CreateNull();
+            o["globe"] = Globe;
+            o["latitude"] = NumberToJValue(Latitude);
+            o["longitude"] = NumberToJValue(Longitude);
+            o["precision"] = NumberToJValue(Precision);
+            return o;
+        }
+
+        private static JValue NumberToJValue(double? num)
+        {
+            if (num == null)
+                return JValue.CreateNull();
+            if (Math.Truncate((double)num) == num)
+            {
+                try
+                {
+                    return new JValue(Convert.ToInt32(num));
+                }
+                catch { }
+            }
+            return new JValue(num);
+        }
+
+        public double Latitude;
+        public double Longitude;
+        public double? Precision;
+        public string Globe;
+    }
+
+    class DataValue
+    {
+        public DataValue(JObject obj)
+        {
+            if (obj.Count != 2)
+                throw new Exception();
+            string type = (string)obj["type"];
+            JToken valueTok = obj["value"];
+            JObject valueObj = valueTok as JObject;
+            if (type == "string")
+                Value = (string)valueTok;
+            else if (type == "globecoordinate")
+                Value = new Coordinate(valueObj);
+            else if (type == "wikibase-entityid")
+                Value = new EntityId(valueObj);
+            else if (type == "quantity")
+                Value = new Quantity(valueObj);
+            else if (type == "time")
+                Value = new Time(valueObj);
+            else if (type == "monolingualtext")
+                Value = new MonolingualText(valueObj);
+            else
+                throw new Exception();
+        }
+
+        public JObject ToJObject()
+        {
+            JToken value = null;
+            string type = null;
+            if (Value is string)
+            {
+                type = "string";
+                value = (string)Value;
+            }
+            else if (Value is Coordinate)
+            {
+                type = "globecoordinate";
+                value = (Value as Coordinate).ToJObject();
+            }
+            else if (Value is EntityId)
+            {
+                type = "wikibase-entityid";
+                value = (Value as EntityId).ToJObject();
+            }
+            else if (Value is Quantity)
+            {
+                type = "quantity";
+                value = (Value as Quantity).ToJObject();
+            }
+            else if (Value is Time)
+            {
+                type = "time";
+                value = (Value as Time).ToJObject();
+            }
+            else if (Value is MonolingualText)
+            {
+                type = "monolingualtext";
+                value = (Value as MonolingualText).ToJObject();
+            }
+            else
+                throw new Exception();
+
+            var o = new JObject();
+            o["type"] = type;
+            o["value"] = value;
+            return o;
+        }
+
+        public object Value;
+    }
+
     class Snak
     {
         public Snak(JObject obj)
@@ -46,7 +222,7 @@ namespace WikiTasks
             DataType = (string)obj["datatype"];
             if (SnakType == "value")
             {
-                DataValue = (JObject)obj["datavalue"];
+                DataValue = new DataValue((JObject)obj["datavalue"]);
                 if (obj.Count != 5)
                     throw new Exception();
             }
@@ -64,7 +240,7 @@ namespace WikiTasks
             o["property"] = Property.ToString();
             o["hash"] = Hash;
             if (SnakType == "value")
-                o["datavalue"] = DataValue;
+                o["datavalue"] = DataValue.ToJObject();
             o["datatype"] = DataType;
             return o;
         }
@@ -72,7 +248,7 @@ namespace WikiTasks
         public string SnakType;
         public PId Property;
         public string Hash;
-        public JObject DataValue;
+        public DataValue DataValue;
         public string DataType;
     }
 
@@ -401,11 +577,11 @@ namespace WikiTasks
             return r * c;
         }
 
-        void GetCoord(Claim c, out double lat, out double lon)
+        void GetCoord(Claim claim, out double lat, out double lon)
         {
-            var o = c.MainSnak.DataValue["value"];
-            lat = double.Parse((string)o["latitude"], CultureInfo.InvariantCulture);
-            lon = double.Parse((string)o["longitude"], CultureInfo.InvariantCulture);
+            var coord = claim.MainSnak.DataValue.Value as Coordinate;
+            lat = coord.Latitude;
+            lon = coord.Longitude;
         }
 
         void FillReplData()
@@ -464,7 +640,7 @@ namespace WikiTasks
 
                 if (modifiedOnce)
                 {
-                    if (!p625.Any(c => c.MainSnak.DataValue["value"]["precision"].Type == JTokenType.Null))
+                    if (!p625.Any(c => (c.MainSnak.DataValue.Value as Coordinate).Precision == null))
                     {
                         dbi.ReplData = item.ToString();
                         db.Update(dbi);
@@ -473,7 +649,6 @@ namespace WikiTasks
                     else
                         nullPrec++;
                 }
-
             }
             db.CommitTransaction();
             Console.WriteLine($"Replacements: {replCnt}");
