@@ -80,21 +80,6 @@ namespace WikiTasks
         public JObject Obj;
     }
 
-    class EntityId
-    {
-        public EntityId(JObject obj)
-        {
-            Obj = obj;
-        }
-
-        public JObject ToJObject()
-        {
-            return Obj;
-        }
-
-        public JObject Obj;
-    }
-
     class Coordinate
     {
         public Coordinate(JObject obj)
@@ -155,7 +140,16 @@ namespace WikiTasks
             else if (type == "globecoordinate")
                 Value = new Coordinate(valueObj);
             else if (type == "wikibase-entityid")
-                Value = new EntityId(valueObj);
+            {
+                int id = (int)valueObj["numeric-id"];
+                string entityType = (string)valueObj["entity-type"];
+                if (entityType == "item")
+                    Value = new QId(id);
+                else if (entityType == "property")
+                    Value = new PId(id);
+                else
+                    throw new Exception();
+            }
             else if (type == "quantity")
                 Value = new Quantity(valueObj);
             else if (type == "time")
@@ -180,10 +174,10 @@ namespace WikiTasks
                 type = "globecoordinate";
                 value = (Value as Coordinate).ToJObject();
             }
-            else if (Value is EntityId)
+            else if (Value is WdId)
             {
                 type = "wikibase-entityid";
-                value = (Value as EntityId).ToJObject();
+                value = (Value as WdId).ToJObject();
             }
             else if (Value is Quantity)
             {
@@ -450,6 +444,8 @@ namespace WikiTasks
             return c + Id.ToString();
         }
 
+        public abstract JObject ToJObject();
+
         private readonly char c;
         public readonly int Id;
     }
@@ -462,6 +458,15 @@ namespace WikiTasks
 
         public QId(string id) : base('Q', id)
         {
+        }
+
+        public override JObject ToJObject()
+        {
+            var o = new JObject();
+            o["id"] = ToString();
+            o["numeric-id"] = Id;
+            o["entity-type"] = "item";
+            return o;
         }
     }
 
@@ -488,6 +493,15 @@ namespace WikiTasks
         public bool Equals(PId obj)
         {
             return obj != null && obj.Id == Id;
+        }
+
+        public override JObject ToJObject()
+        {
+            var o = new JObject();
+            o["id"] = ToString();
+            o["numeric-id"] = Id;
+            o["entity-type"] = "property";
+            return o;
         }
     }
 
@@ -632,13 +646,11 @@ namespace WikiTasks
 
         void FillReplData()
         {
-            /*
             int replCnt = 0;
             int nullPrec = 0;
-            */
 
             var dba = db.Items.Where(dbi => dbi.Status == ProcessStatus.NotProcessed).ToArray();
-            //db.BeginTransaction();
+            db.BeginTransaction();
             foreach (var dbi in dba)
             {
                 var item = new Item(dbi.SrcData);
@@ -654,15 +666,22 @@ namespace WikiTasks
                 {
                     modified = false;
 
-                    foreach (var c1 in p625.Where(c => 
-                        c.Qualifiers == null && c.References == null))
+                    var fltp625 = p625.Where(c =>
+                        c.References != null &&
+                        c.References.Count == 1 &&
+                        c.References[0].Snaks.Count == 1 &&
+                        c.References[0].Snaks.ContainsKey(new PId(143)) &&
+                        c.References[0].Snaks[new PId(143)].Count == 1 &&
+                        (c.References[0].Snaks[new PId(143)][0].DataValue.Value as QId).Id == 206855);
+
+                    foreach (var c1 in fltp625.Where(c => c.Qualifiers == null))
                     {
                         double c1lat;
                         double c1lon;
 
                         GetCoord(c1, out c1lat, out c1lon);
 
-                        foreach (var c2 in p625.Where(c => c.Id != c1.Id))
+                        foreach (var c2 in fltp625.Where(c => c.Id != c1.Id))
                         {
                             double c2lat;
                             double c2lon;
@@ -686,7 +705,6 @@ namespace WikiTasks
                         break;
                 }
 
-                /*
                 if (modifiedOnce)
                 {
                     if (!p625.Any(c => (c.MainSnak.DataValue.Value as Coordinate).Precision == null))
@@ -698,11 +716,10 @@ namespace WikiTasks
                     else
                         nullPrec++;
                 }
-                */
             }
-            //db.CommitTransaction();
-            //Console.WriteLine($"Replacements: {replCnt}");
-            //Console.WriteLine($"Null precision: {nullPrec}");
+            db.CommitTransaction();
+            Console.WriteLine($"Replacements: {replCnt}");
+            Console.WriteLine($"Null precision: {nullPrec}");
         }
 
         bool UpdateEntity(Item item, string summary)
@@ -738,14 +755,14 @@ namespace WikiTasks
 
         Program()
         {
-            //api = new MwApi("www.wikidata.org");
-            //ObtainEditToken();
+            api = new MwApi("www.wikidata.org");
+            ObtainEditToken();
 
             //GetItems(GetIds());
 
-            FillReplData();
+            //FillReplData();
 
-            //MakeReplacements();
+            MakeReplacements();
         }
 
         static void Main(string[] args)
