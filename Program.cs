@@ -252,6 +252,39 @@ namespace WikiTasks
         public string DataType;
     }
 
+    class Reference
+    {
+        public Reference(JObject obj)
+        {
+            if (obj.Count != 3)
+                throw new Exception();
+
+            Hash = (string)obj["hash"];
+            var snaks = (JObject)obj["snaks"];
+            var snaksOrder = ((JArray)obj["snaks-order"]).Select(x => (string)x).ToArray();
+
+            Snaks = new OrderedDictionary<PId, List<Snak>>();
+            foreach (var s in snaksOrder)
+            {
+                Snaks.Add(new PId(s),
+                    ((JArray)snaks[s]).Select(x => new Snak((JObject)x)).ToList());
+            }
+        }
+
+        public JObject ToJObject()
+        {
+            var o = new JObject();
+            o["hash"] = Hash;
+            o["snaks"] = JObject.FromObject(Snaks.ToDictionary(
+                kv => kv.Key, kv => kv.Value.Select(s => s.ToJObject())));
+            o["snaks-order"] = JArray.FromObject(Snaks.Keys.Select(id => id.ToString()));
+            return o;
+        }
+
+        public string Hash;
+        public OrderedDictionary<PId, List<Snak>> Snaks;
+    }
+
     class Claim
     {
         public Claim(JObject obj)
@@ -268,7 +301,7 @@ namespace WikiTasks
                 else if (t.Key == "mainsnak")
                     MainSnak = new Snak((JObject)t.Value);
                 else if (t.Key == "references")
-                    References = ((JArray)t.Value).Select(x => (JObject)x).ToArray();
+                    References = ((JArray)t.Value).Select(x => new Reference((JObject)x)).ToList();
                 else if (t.Key == "qualifiers")
                     qualifiers = (JObject)t.Value;
                 else if (t.Key == "qualifiers-order")
@@ -307,7 +340,7 @@ namespace WikiTasks
                 o["qualifiers-order"] = JArray.FromObject(Qualifiers.Keys.Select(id => id.ToString()));
             }
             if (References != null)
-                o["references"] = JArray.FromObject(References);
+                o["references"] = JArray.FromObject(References.Select(r => r.ToJObject()));
             return o;
         }
 
@@ -316,7 +349,7 @@ namespace WikiTasks
         public string Id;
         public string Rank;
         public OrderedDictionary<PId, List<Snak>> Qualifiers;
-        public JObject[] References;
+        public List<Reference> References;
     }
 
     class Item
