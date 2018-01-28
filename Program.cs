@@ -1,10 +1,13 @@
 ﻿using LinqToDB;
 using LinqToDB.Mapping;
+using Newtonsoft.Json.Linq;
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Net;
+using System.Threading;
+using System.Threading.Tasks;
 using System.Xml;
-using Newtonsoft.Json.Linq;
 
 namespace WikiTasks
 {
@@ -511,6 +514,9 @@ namespace WikiTasks
         MwApi api;
         static Db db;
 
+        const int editsPerMinute = 120;
+        const int connectionsLimit = 4;
+
         string csrfToken;
 
         List<List<QId>> SplitToChunks(QId[] ids, int chunkSize)
@@ -722,9 +728,9 @@ namespace WikiTasks
             Console.WriteLine($"Null precision: {nullPrec}");
         }
 
-        bool UpdateEntity(Item item, string summary)
+        async Task<bool> UpdateEntity(Item item, string summary)
         {
-            string json = api.PostRequest(
+            string json = await api.PostRequestAsync(
                 "action", "wbeditentity",
                 "format", "json",
                 "id", item.Id.ToString(),
@@ -741,15 +747,30 @@ namespace WikiTasks
 
         void MakeReplacements()
         {
+            var tasks = new List<Task>();
             Console.Write("Making replacements");
-            foreach (var dbi in db.Items.Where(i => i.Status == 0 && i.ReplData != null).Take(10).ToArray())
+            foreach (var dbi in db.Items.Where(i => i.Status == 0 && i.ReplData != null).Take(120).ToArray())
             {
-                bool success = UpdateEntity(new Item(dbi.ReplData),
+                if (tasks.Any(t => t.IsFaulted))
+                    Task.WaitAll(tasks.ToArray());
+                tasks.RemoveAll(t => t.IsCompleted);
+
+                Task<bool> updateTask = UpdateEntity(new Item(dbi.ReplData),
                     "Remove duplicate coordinates (distance < 0.1m)");
-                dbi.Status = success ? ProcessStatus.Success : ProcessStatus.Failure;
-                Console.Write(success ? '.' : 'x');
-                db.Update(dbi);
+                tasks.Add(updateTask);
+                tasks.Add(updateTask.ContinueWith(cont =>
+                {
+                    bool isUpdateSuccessful = cont.Result;
+                    lock (db)
+                    {
+                        Console.Write(isUpdateSuccessful ? '.' : 'x');
+                        dbi.Status = isUpdateSuccessful ? ProcessStatus.Success : ProcessStatus.Failure;
+                        db.Update(dbi);
+                    }
+                }));
+                Thread.Sleep(60 * 1000 / editsPerMinute);
             }
+            Task.WaitAll(tasks.ToArray());
             Console.WriteLine(" Done");
         }
 
@@ -767,6 +788,7 @@ namespace WikiTasks
 
         static void Main(string[] args)
         {
+            ServicePointManager.DefaultConnectionLimit = connectionsLimit;
             db = new Db();
             new Program();
             db.Dispose();
