@@ -256,6 +256,9 @@ namespace WikiTasks
     {
         public Claim(JObject obj)
         {
+            JObject qualifiers = null;
+            string[] qualifiersOrder = null;
+
             foreach (var t in obj)
             {
                 if (t.Key == "id")
@@ -267,9 +270,9 @@ namespace WikiTasks
                 else if (t.Key == "references")
                     References = ((JArray)t.Value).Select(x => (JObject)x).ToArray();
                 else if (t.Key == "qualifiers")
-                    Qualifiers = (JObject)t.Value;
+                    qualifiers = (JObject)t.Value;
                 else if (t.Key == "qualifiers-order")
-                    QualifiersOrder = ((JArray)t.Value).Select(x => (string)x).ToArray();
+                    qualifiersOrder = ((JArray)t.Value).Select(x => (string)x).ToArray();
                 else if (t.Key == "type")
                 {
                     if ((string)t.Value != "statement")
@@ -277,6 +280,16 @@ namespace WikiTasks
                 }
                 else
                     throw new Exception();
+            }
+
+            if (qualifiers != null)
+            {
+                Qualifiers = new OrderedDictionary<PId, List<Snak>>();
+                foreach (var q in qualifiersOrder)
+                {
+                    Qualifiers.Add(new PId(q),
+                        ((JArray)qualifiers[q]).Select(x => new Snak((JObject)x)).ToList());
+                }
             }
         }
 
@@ -289,8 +302,9 @@ namespace WikiTasks
             o["mainsnak"] = MainSnak.ToJObject();
             if (Qualifiers != null)
             {
-                o["qualifiers"] = Qualifiers;
-                o["qualifiers-order"] = JArray.FromObject(QualifiersOrder);
+                o["qualifiers"] = JObject.FromObject(Qualifiers.ToDictionary(
+                    kv => kv.Key, kv => kv.Value.Select(s => s.ToJObject())));
+                o["qualifiers-order"] = JArray.FromObject(Qualifiers.Keys.Select(id => id.ToString()));
             }
             if (References != null)
                 o["references"] = JArray.FromObject(References);
@@ -301,8 +315,7 @@ namespace WikiTasks
         public Snak MainSnak;
         public string Id;
         public string Rank;
-        public JObject Qualifiers;
-        public string[] QualifiersOrder;
+        public OrderedDictionary<PId, List<Snak>> Qualifiers;
         public JObject[] References;
     }
 
@@ -586,11 +599,13 @@ namespace WikiTasks
 
         void FillReplData()
         {
+            /*
             int replCnt = 0;
             int nullPrec = 0;
+            */
 
             var dba = db.Items.Where(dbi => dbi.Status == ProcessStatus.NotProcessed).ToArray();
-            db.BeginTransaction();
+            //db.BeginTransaction();
             foreach (var dbi in dba)
             {
                 var item = new Item(dbi.SrcData);
@@ -638,6 +653,7 @@ namespace WikiTasks
                         break;
                 }
 
+                /*
                 if (modifiedOnce)
                 {
                     if (!p625.Any(c => (c.MainSnak.DataValue.Value as Coordinate).Precision == null))
@@ -649,10 +665,11 @@ namespace WikiTasks
                     else
                         nullPrec++;
                 }
+                */
             }
-            db.CommitTransaction();
-            Console.WriteLine($"Replacements: {replCnt}");
-            Console.WriteLine($"Null precision: {nullPrec}");
+            //db.CommitTransaction();
+            //Console.WriteLine($"Replacements: {replCnt}");
+            //Console.WriteLine($"Null precision: {nullPrec}");
         }
 
         bool UpdateEntity(Item item, string summary)
@@ -688,14 +705,14 @@ namespace WikiTasks
 
         Program()
         {
-            api = new MwApi("www.wikidata.org");
-            ObtainEditToken();
+            //api = new MwApi("www.wikidata.org");
+            //ObtainEditToken();
 
             //GetItems(GetIds());
 
-            //FillReplData();
+            FillReplData();
 
-            MakeReplacements();
+            //MakeReplacements();
         }
 
         static void Main(string[] args)
