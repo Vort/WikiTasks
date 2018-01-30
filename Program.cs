@@ -139,7 +139,7 @@ namespace WikiTasks
                 "wikidata_item", "with"))
             {
                 db.Insert(new Article() {
-                    Title = petScanEntry.ArticleTitle.Replace('_', ' '),
+                    Title = petScanEntry.Title.Replace('_', ' '),
                     WikidataItem = petScanEntry.WikidataItem
                 });
             }
@@ -241,7 +241,7 @@ namespace WikiTasks
             foreach (var qName in qNames)
             {
                 var foundArticles = articles.Where(
-                    a => a.MouthParam == qName.ArticleTitle.Replace('_', ' ')).ToArray();
+                    a => a.MouthParam == qName.Title.Replace('_', ' ')).ToArray();
                 foreach (var article in foundArticles)
                     importEntries.Add(new ImportEntry { RootItem = article.WikidataItem, MouthItem = qName.WikidataItem });
             }
@@ -321,7 +321,7 @@ namespace WikiTasks
                 "manual_list_wiki", "ruwiki",
                 "categories", "Карточка реки: исправить: Устье\r\nКарточка реки: заполнить: Устье\r\nКарточка реки: нет статьи об устье",
                 "combination", "union",
-                "source_combination", "manual not categories").Select(pe => pe.ArticleTitle.Replace("_", " ")).ToList();
+                "source_combination", "manual not categories").Select(pe => pe.Title.Replace("_", " ")).ToList();
             File.WriteAllLines("bad_parameters.txt", errArts.OrderBy(t => t).Select(n => $"* [[{n}]]"));
         }
 
