@@ -3,8 +3,10 @@ using LinqToDB.Mapping;
 using Newtonsoft.Json.Linq;
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.Linq;
 using System.Net;
+using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Xml;
@@ -31,31 +33,33 @@ namespace WikiTasks
         public ProcessStatus Status;
     };
 
+    [Table(Name = "Articles")]
+    public class Article
+    {
+        [PrimaryKey]
+        public int PageId;
+        [Column()]
+        public string Timestamp;
+        [Column()]
+        public string Title;
+        [Column()]
+        public string WikiText;
+        [Column()]
+        public int ItemId;
+    };
+
     public class Db : LinqToDB.Data.DataConnection
     {
         public Db() : base("Db") { }
 
         public ITable<DbItem> Items { get { return GetTable<DbItem>(); } }
+
+        public ITable<Article> Articles { get { return GetTable<Article>(); } }
     }
 
     class MonolingualText
     {
         public MonolingualText(JObject obj)
-        {
-            Obj = obj;
-        }
-
-        public JObject ToJObject()
-        {
-            return Obj;
-        }
-
-        public JObject Obj;
-    }
-
-    class Time
-    {
-        public Time(JObject obj)
         {
             Obj = obj;
         }
@@ -81,6 +85,40 @@ namespace WikiTasks
         }
 
         public JObject Obj;
+    }
+
+    class WdTime
+    {
+        public WdTime(JObject obj)
+        {
+            if (obj.Count != 6)
+                throw new Exception();
+            if ((int)obj["before"] != 0)
+                throw new Exception();
+            if ((int)obj["after"] != 0)
+                throw new Exception();
+            Time = (string)obj["time"];
+            TimeZone = (int)obj["timezone"];
+            Precision = (int)obj["precision"];
+            CalendarModel = (string)obj["calendarmodel"];
+        }
+
+        public JObject ToJObject()
+        {
+            var o = new JObject();
+            o["before"] = 0;
+            o["after"] = 0;
+            o["time"] = Time;
+            o["timezone"] = TimeZone;
+            o["precision"] = Precision;
+            o["calendarmodel"] = CalendarModel;
+            return o;
+        }
+
+        public string Time;
+        public int TimeZone;
+        public int Precision;
+        public string CalendarModel;
     }
 
     class Coordinate
@@ -156,7 +194,7 @@ namespace WikiTasks
             else if (type == "quantity")
                 Value = new Quantity(valueObj);
             else if (type == "time")
-                Value = new Time(valueObj);
+                Value = new WdTime(valueObj);
             else if (type == "monolingualtext")
                 Value = new MonolingualText(valueObj);
             else
@@ -187,10 +225,10 @@ namespace WikiTasks
                 type = "quantity";
                 value = (Value as Quantity).ToJObject();
             }
-            else if (Value is Time)
+            else if (Value is WdTime)
             {
                 type = "time";
-                value = (Value as Time).ToJObject();
+                value = (Value as WdTime).ToJObject();
             }
             else if (Value is MonolingualText)
             {
@@ -511,7 +549,8 @@ namespace WikiTasks
 
     class Program
     {
-        MwApi api;
+        MwApi wpApi;
+        MwApi wdApi;
         static Db db;
 
         const int editsPerMinute = 120;
@@ -519,20 +558,20 @@ namespace WikiTasks
 
         string csrfToken;
 
-        List<List<QId>> SplitToChunks(QId[] ids, int chunkSize)
+        List<List<T>> SplitToChunks<T>(T[] elements, int chunkSize)
         {
-            int chunkCount = (ids.Length + chunkSize - 1) / chunkSize;
+            int chunkCount = (elements.Length + chunkSize - 1) / chunkSize;
 
-            var chunks = new List<List<QId>>();
+            var chunks = new List<List<T>>();
             for (int i = 0; i < chunkCount; i++)
             {
-                var chunk = new List<QId>();
+                var chunk = new List<T>();
                 for (int j = 0; j < chunkSize; j++)
                 {
                     int k = i * chunkSize + j;
-                    if (k >= ids.Length)
+                    if (k >= elements.Length)
                         break;
-                    chunk.Add(ids[k]);
+                    chunk.Add(elements[k]);
                 }
                 chunks.Add(chunk);
             }
@@ -542,7 +581,7 @@ namespace WikiTasks
 
         string GetToken(string type)
         {
-            string xml = api.PostRequest(
+            string xml = wdApi.PostRequest(
                 "action", "query",
                 "format", "xml",
                 "meta", "tokens",
@@ -575,14 +614,7 @@ namespace WikiTasks
                 GetSchema(db).Tables.Any(t => t.TableName == name);
         }
 
-        QId[] GetIds()
-        {
-            string[] ids = SparqlApi.GetItemIds(
-                SparqlApi.RunWikidataQuery("dup_sparql.txt"), "river");
-            return ids.Select(i => new QId(i)).ToArray();
-        }
-
-        void GetItems(QId[] ids)
+        void DownloadItems(QId[] ids)
         {
             if (HaveTable("Items"))
                 db.DropTable<DbItem>();
@@ -592,10 +624,10 @@ namespace WikiTasks
             var chunks = SplitToChunks(ids, 50);
             foreach (var chunk in chunks)
             {
-                string json = api.PostRequest(
+                string json = wdApi.PostRequest(
                     "action", "wbgetentities",
                     "format", "json",
-                    "ids", string.Join<QId>("|", chunk),
+                    "ids", string.Join("|", chunk),
                     "redirects", "no");
                 Console.Write('.');
 
@@ -622,39 +654,86 @@ namespace WikiTasks
             Console.WriteLine(" Done");
         }
 
-        public static double DegToRad(double degrees)
+        bool FixDate(Dictionary<PId, List<Claim>> claims,
+            string wikiText, int propertyId, string paramName)
         {
-            return degrees * Math.PI / 180.0;
-        }
+            var p = new PId(propertyId);
 
-        public static double Distance(double lat1, double lon1, double lat2, double lon2)
-        {
-            double r = 6371000.0;
-            double lat1rad = DegToRad(lat1);
-            double lat2rad = DegToRad(lat2);
-            double deltaLatRad = DegToRad(lat2 - lat1);
-            double deltaLonRad = DegToRad(lon2 - lon1);
+            if (!claims.ContainsKey(p))
+                return false;
 
-            double a = Math.Sin(deltaLatRad / 2) * Math.Sin(deltaLatRad / 2) +
-                Math.Cos(lat1rad) * Math.Cos(lat2rad) *
-                Math.Sin(deltaLonRad / 2) * Math.Sin(deltaLonRad / 2);
-            double c = 2 * Math.Atan2(Math.Sqrt(a), Math.Sqrt(1 - a));
+            var pcs = claims[p];
+            if (pcs.Count != 1)
+                return false;
 
-            return r * c;
-        }
+            var c = pcs[0];
 
-        void GetCoord(Claim claim, out double lat, out double lon)
-        {
-            var coord = claim.MainSnak.DataValue.Value as Coordinate;
-            lat = coord.Latitude;
-            lon = coord.Longitude;
+            if (c.Qualifiers == null)
+                return false;
+
+            if (c.Qualifiers.Count != 1)
+                return false;
+
+            var q = c.Qualifiers[0];
+
+            if (q.Count != 1)
+                return false;
+
+            var s = q[0];
+
+            if (s.Property.Id != 31)
+                return false;
+
+            if ((s.DataValue.Value as QId).Id != 26932615)
+                return false;
+
+            var matches = Regex.Matches(wikiText, $"\\| *{paramName} *= *([0-9]+).([0-9]+).([0-9]+) ?\\(([0-9]+)\\)");
+            if (matches.Count != 1)
+                return false;
+
+            var match = matches[0];
+
+            int gDay = int.Parse(match.Groups[1].Value);
+            int gMonth = int.Parse(match.Groups[2].Value);
+            int gYear = int.Parse(match.Groups[3].Value);
+            int jDay = int.Parse(match.Groups[4].Value);
+
+            var wdt = c.MainSnak.DataValue.Value as WdTime;
+            if (wdt.Precision != 11)
+                return false;
+            if (wdt.Time[0] != '+')
+                return false;
+            DateTime t;
+            if (!DateTime.TryParse(wdt.Time.Substring(1),
+                CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out t))
+            {
+                return false;
+            }
+
+            if (t.Day != gDay)
+                return false;
+            if (t.Month != gMonth)
+                return false;
+            if (t.Year != gYear)
+                return false;
+
+            var jc = new JulianCalendar();
+            DateTime jt = new DateTime(jc.GetYear(t), jc.GetMonth(t), jc.GetDayOfMonth(t));
+
+            if (jt.Day != jDay)
+                return false;
+
+            wdt.Time = "+" + jt.ToString("s") + "Z";
+            c.Qualifiers = null;
+
+            return true;
         }
 
         void FillReplData()
         {
             int replCnt = 0;
-            int nullPrec = 0;
 
+            Console.Write("Processing articles...");
             var dba = db.Items.Where(dbi => dbi.Status == ProcessStatus.NotProcessed).ToArray();
             db.BeginTransaction();
             foreach (var dbi in dba)
@@ -664,73 +743,28 @@ namespace WikiTasks
                 if (!JToken.DeepEquals(JObject.Parse(json2), JObject.Parse(dbi.SrcData)))
                     throw new Exception();
 
-                var p625 = item.Claims[new PId(625)];
+                var article = db.Articles.First(a => a.ItemId == item.Id.Id);
 
-                bool modified;
-                bool modifiedOnce = false;
-                for (;;)
+                bool bf = FixDate(item.Claims, article.WikiText, 569, "Дата рождения");
+                bool df = FixDate(item.Claims, article.WikiText, 570, "Дата смерти");
+
+                if (bf || df)
                 {
-                    modified = false;
-
-                    var fltp625 = p625.Where(c =>
-                        c.References != null &&
-                        c.References.Count == 1 &&
-                        c.References[0].Snaks.Count == 1 &&
-                        c.References[0].Snaks.ContainsKey(new PId(143)) &&
-                        c.References[0].Snaks[new PId(143)].Count == 1 &&
-                        (c.References[0].Snaks[new PId(143)][0].DataValue.Value as QId).Id == 206855);
-
-                    foreach (var c1 in fltp625.Where(c => c.Qualifiers == null))
-                    {
-                        double c1lat;
-                        double c1lon;
-
-                        GetCoord(c1, out c1lat, out c1lon);
-
-                        foreach (var c2 in fltp625.Where(c => c.Id != c1.Id))
-                        {
-                            double c2lat;
-                            double c2lon;
-
-                            GetCoord(c2, out c2lat, out c2lon);
-
-                            double d = Distance(c1lat, c1lon, c2lat, c2lon);
-                            if (d < 0.1)
-                            {
-                                p625.RemoveAll(c => c.Id == c1.Id);
-                                modifiedOnce = true;
-                                modified = true;
-                                break;
-                            }
-                        }
-                        if (modified)
-                            break;
-                    }
-
-                    if (!modified)
-                        break;
-                }
-
-                if (modifiedOnce)
-                {
-                    if (!p625.Any(c => (c.MainSnak.DataValue.Value as Coordinate).Precision == null))
-                    {
-                        dbi.ReplData = item.ToString();
-                        db.Update(dbi);
-                        replCnt++;
-                    }
-                    else
-                        nullPrec++;
+                    dbi.ReplData = item.ToString();
+                    db.Update(dbi);
+                    replCnt++;
+                    if (replCnt % 50 == 0)
+                        Console.Write('.');
                 }
             }
             db.CommitTransaction();
+            Console.WriteLine(" Done");
             Console.WriteLine($"Replacements: {replCnt}");
-            Console.WriteLine($"Null precision: {nullPrec}");
         }
 
         async Task<bool> UpdateEntity(Item item, string summary)
         {
-            string json = await api.PostRequestAsync(
+            string json = await wdApi.PostRequestAsync(
                 "action", "wbeditentity",
                 "format", "json",
                 "id", item.Id.ToString(),
@@ -749,14 +783,14 @@ namespace WikiTasks
         {
             var tasks = new List<Task>();
             Console.Write("Making replacements");
-            foreach (var dbi in db.Items.Where(i => i.Status == 0 && i.ReplData != null).Take(120).ToArray())
+            foreach (var dbi in db.Items.Where(i => i.Status == 0 && i.ReplData != null).Take(2).ToArray())
             {
                 if (tasks.Any(t => t.IsFaulted))
                     Task.WaitAll(tasks.ToArray());
                 tasks.RemoveAll(t => t.IsCompleted);
 
                 Task<bool> updateTask = UpdateEntity(new Item(dbi.ReplData),
-                    "Remove duplicate coordinates (distance < 0.1m)");
+                    "Reimport julian dates from ruwiki");
                 tasks.Add(updateTask);
                 tasks.Add(updateTask.ContinueWith(cont =>
                 {
@@ -774,14 +808,92 @@ namespace WikiTasks
             Console.WriteLine(" Done");
         }
 
+
+        List<Article> DeserializeArticles(string xml)
+        {
+            List<Article> articles = new List<Article>();
+
+            XmlDocument doc = new XmlDocument();
+            doc.LoadXml(xml);
+
+            foreach (XmlNode pageNode in doc.SelectNodes("/api/query/pages/page"))
+            {
+                if (pageNode.Attributes["missing"] != null)
+                    continue;
+
+                Article article = new Article();
+                article.Title = pageNode.Attributes["title"].InnerText;
+                article.PageId = int.Parse(pageNode.Attributes["pageid"].InnerText);
+
+                XmlNode revNode = pageNode.SelectSingleNode("revisions/rev");
+                article.WikiText = revNode.InnerText;
+                if (revNode.Attributes["timestamp"] != null)
+                    article.Timestamp = revNode.Attributes["timestamp"].InnerText;
+
+                articles.Add(article);
+            }
+
+            return articles;
+        }
+
+        void DownloadArticles(int[] ids)
+        {
+            if (HaveTable("Articles"))
+                db.DropTable<Article>();
+            db.CreateTable<Article>();
+
+            Console.Write("Downloading articles");
+            var chunks = SplitToChunks(ids, 50);
+            foreach (var chunk in chunks)
+            {
+                string idsChunk = string.Join("|", chunk);
+                string xml = wpApi.PostRequest(
+                    "action", "query",
+                    "prop", "revisions",
+                    "rvprop", "timestamp|content",
+                    "format", "xml",
+                    "pageids", idsChunk);
+                Console.Write('.');
+
+                List<Article> articles = DeserializeArticles(xml);
+                db.BeginTransaction();
+                foreach (Article a in articles)
+                    db.Insert(a);
+                db.CommitTransaction();
+            }
+            Console.WriteLine(" Done");
+        }
+
         Program()
         {
-            api = new MwApi("www.wikidata.org");
+            Console.Write("Obtaining article list...");
+            var petRes = PetScan.Query(
+                "language", "ru",
+                "sparql", "SELECT ?item WHERE { { ?item p:P569 ?s1 . ?s1 pq:P31 wd:Q26932615 } UNION { ?item p:P570 ?s2 . ?s2 pq:P31 wd:Q26932615 } } GROUP BY ?item ORDER BY ?item",
+                "common_wiki", "cats",
+                "wikidata_item", "with");
+            Console.WriteLine(" Done");
+
+            wpApi = new MwApi("ru.wikipedia.org");
+
+
+            DownloadArticles(petRes.Select(r => r.Id).ToArray());
+
+            var articles = db.Articles.ToArray();
+            db.BeginTransaction();
+            foreach (Article a in articles)
+            {
+                a.ItemId = new QId(petRes.First(r => r.Id == a.PageId).WikidataItem).Id;
+                db.Update(a);
+            }
+            db.CommitTransaction();
+
+            wdApi = new MwApi("www.wikidata.org");
             ObtainEditToken();
 
-            //GetItems(GetIds());
+            DownloadItems(db.Articles.ToArray().Select(a => new QId(a.ItemId)).ToArray());
 
-            //FillReplData();
+            FillReplData();
 
             MakeReplacements();
         }
