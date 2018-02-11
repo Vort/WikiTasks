@@ -96,7 +96,6 @@ namespace WikiTasks
         void DownloadArticles()
         {
             Console.Write("Downloading articles");
-            wpApi = new WpApi();
             var updChunks = SplitToChunks(
                 db.Articles.Select(a => a.Title).ToArray(), 50);
             foreach (var chunk in updChunks)
@@ -229,10 +228,42 @@ namespace WikiTasks
             Console.Write("Converting names to items...");
 
             var srcNames = articles.Where(a => a.MouthParam != null && !a.MouthParam.Contains('[')).
-                Select(a => a.MouthParam).OrderBy(m => m).Distinct().ToArray();
+                Select(a => a.MouthParam.Trim()).OrderBy(m => m).Distinct().ToArray();
+
+            var redirects = new Dictionary<string, string>();
+            var revRedirects = new Dictionary<string, string>();
+            var chunks = SplitToChunks(srcNames, 50);
+            foreach (var chunk in chunks)
+            {
+                string xml = wpApi.PostRequest(
+                    "action", "query",
+                    "prop", "revisions",
+                    "redirects", "1",
+                    "format", "xml",
+                    "titles", string.Join("|", chunk));
+
+                XmlDocument doc = new XmlDocument();
+                doc.LoadXml(xml);
+
+                foreach (XmlNode pageNode in doc.SelectNodes("/api/query/redirects/r"))
+                {
+                    string from = pageNode.Attributes["from"].InnerText;
+                    string to = pageNode.Attributes["to"].InnerText;
+                    redirects.Add(from, to);
+                    revRedirects.Add(to, from);
+                }
+            }
+
+            var replNames = new List<string>();
+            foreach (var name in srcNames)
+                if (redirects.ContainsKey(name))
+                    replNames.Add(redirects[name]);
+                else
+                    replNames.Add(name);
+
             var qNames = PetScan.Query(
-                "sparql", "SELECT ?obj WHERE { VALUES ?okTypes { wd:Q4022 wd:Q23397 wd:Q39594 wd:Q165 wd:Q9430 wd:Q355304 wd:Q131681 wd:Q187971 wd:Q47521 wd:Q45776 wd:Q37901 wd:Q986177 wd:Q1973404 wd:Q47053 wd:Q204894 wd:Q12284 wd:Q1322134 wd:Q159675 wd:Q211302 wd:Q188025 wd:Q9019918 wd:Q6341928 wd:Q573344 wd:Q1172599 wd:Q283202 } ?obj wdt:P31 ?okTypes }",
-                "manual_list", string.Join("\r\n", srcNames),
+                "sparql", "SELECT ?obj WHERE { VALUES ?okTypes { wd:Q4022 wd:Q23397 wd:Q39594 wd:Q165 wd:Q9430 wd:Q355304 wd:Q131681 wd:Q187971 wd:Q47521 wd:Q45776 wd:Q37901 wd:Q986177 wd:Q1973404 wd:Q47053 wd:Q204894 wd:Q12284 wd:Q1322134 wd:Q159675 wd:Q211302 wd:Q188025 wd:Q9019918 wd:Q6341928 wd:Q573344 wd:Q1172599 wd:Q283202 wd:Q31615 } ?obj wdt:P31 ?okTypes }",
+                "manual_list", string.Join("\r\n", replNames),
                 "manual_list_wiki", "ruwiki",
                 "common_wiki", "manual",
                 "wikidata_item", "with");
@@ -240,8 +271,12 @@ namespace WikiTasks
             var importEntries = new List<ImportEntry>();
             foreach (var qName in qNames)
             {
+                string title1 = qName.Title.Replace('_', ' ');
+                string title2 = title1;
+                if (revRedirects.ContainsKey(title1))
+                    title2 = revRedirects[title1];
                 var foundArticles = articles.Where(
-                    a => a.MouthParam == qName.Title.Replace('_', ' ')).ToArray();
+                    a => a.MouthParam == title1 || a.MouthParam == title2).ToArray();
                 foreach (var article in foundArticles)
                     importEntries.Add(new ImportEntry { RootItem = article.WikidataItem, MouthItem = qName.WikidataItem });
             }
@@ -322,11 +357,12 @@ namespace WikiTasks
                 "categories", "Карточка реки: исправить: Устье\r\nКарточка реки: заполнить: Устье\r\nКарточка реки: нет статьи об устье",
                 "combination", "union",
                 "source_combination", "manual not categories").Select(pe => pe.Title.Replace("_", " ")).ToList();
-            File.WriteAllLines("bad_parameters.txt", errArts.OrderBy(t => t).Select(n => $"* [[{n}]]"));
+            File.WriteAllLines("bad_parameters.txt", errArts.OrderBy(t => t).Select(n => $"# [[{n}]]"));
         }
 
         Program()
         {
+            wpApi = new WpApi();
             FillArticlesDb();
 
             List<Article> articles;

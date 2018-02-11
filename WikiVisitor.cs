@@ -37,9 +37,9 @@ namespace WikiTasks
                             paramValue += wwText;
                         }
                     }
-                    paramValue = paramValue.Trim(' ', '/');
+                    paramValue = paramValue.Trim('/').Trim();
                     if (paramValue != "")
-                        MouthParam = paramValue;
+                        MouthParam = char.ToUpper(paramValue[0]) + paramValue.Substring(1);
                 }
             }
             return null;
