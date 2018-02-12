@@ -133,7 +133,7 @@ namespace WikiTasks
                 "language", "ru",
                 "categories", "Реки по алфавиту",
                 "negcats", "Википедия:Статьи о реках, требующие проверки",
-                "sparql", "SELECT ?r WHERE { ?r wdt:P31 wd:Q4022 ; wdt:P17 wd:Q159 FILTER NOT EXISTS { ?r wdt:P403 ?d } }",
+                "sparql", "SELECT ?r WHERE { ?r wdt:P31 wd:Q4022 . ?s schema:about ?r ; schema:inLanguage \"ru\" FILTER NOT EXISTS { ?r wdt:P403 ?d } }",
                 "common_wiki", "cats",
                 "wikidata_item", "with"))
             {
