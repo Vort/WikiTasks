@@ -213,15 +213,13 @@ namespace WikiTasks
             foreach (var article in articles)
             {
                 var matches = Regex.Matches(
-                    article.SrcWikiText, "www\\.gramota\\.ru/slovari/dic/\\?([^ |\\]}\\n'<]+)");
+                    article.SrcWikiText, "gramota\\.ru/slovari/dic[/]?\\?([^ |\\]}\\n'<]+)");
                 if (matches.Count == 0)
                     throw new Exception();
                 for (int i = 0; i < matches.Count; i++)
                 {
                     string part = matches[i].Groups[1].Value;
-                    if (!Regex.IsMatch(part, "%[0-9a-fA-F]"))
-                        continue;
-                    if (Regex.IsMatch(part, "%[0-9a-fA-F]{4}"))
+                    if (!Regex.IsMatch(part, "%[0-9a-fA-F]{2,4}"))
                         continue;
                     repls[part] = part;
                 }
@@ -230,14 +228,24 @@ namespace WikiTasks
             foreach (var repl in repls.Keys.ToArray())
             {
                 string result = repl;
-                bool utf8 = repl.Contains("%D0");
+                for (int i = 0; i < 2; i++)
+                {
+                    if (Regex.IsMatch(result, "%25[0-9a-fA-F]{2}"))
+                        result = Regex.Replace(result, "%25([0-9a-fA-F]{2})", "%$1");
+                }
+                bool utf8 = Regex.Matches(result, "%D[01]").Count > 1;
                 if (!utf8)
                 {
                     for (int i = 0xC0; i <= 0xFF; i++)
-                        result = result.Replace($"%{i:X2}",
-                            Encoding.GetEncoding(1251).GetChars(new byte[] { (byte)i })[0].ToString());
+                    {
+                        string decChar = Encoding.GetEncoding(1251).
+                            GetChars(new byte[] { (byte)i })[0].ToString();
+                        result = result.Replace($"%{i:X2}", decChar);
+                    }
                     result = result.Replace("%A8", "Ё");
                     result = result.Replace("%B8", "ё");
+                    result = result.Replace("%3F", "?");
+                    result = result.Replace("%2A", "*");
                 }
                 else
                 {
@@ -251,6 +259,8 @@ namespace WikiTasks
                 }
                 repls[repl] = result;
             }
+
+            File.WriteAllLines("fragments.txt", repls.Values);
 
             db.BeginTransaction();
             foreach (var article in articles)
@@ -290,7 +300,7 @@ namespace WikiTasks
         {
             wpApi = new MwApi("ru.wikipedia.org");
 
-            var ids = SearchArticles("insource:\"www.gramota.ru/slovari/dic/?\"");
+            var ids = SearchArticles("insource:\"gramota.ru/slovari/dic\"");
             DownloadArticles(ids.ToArray());
 
             ProcessArticles();
