@@ -7,6 +7,7 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
+using System.Xml;
 
 namespace WikiTasks
 {
@@ -122,6 +123,23 @@ namespace WikiTasks
                 else
                     return GZipUnpack(await response.Content.ReadAsByteArrayAsync());
             }
+        }
+
+        public string GetToken(string type)
+        {
+            string xml = PostRequest(
+                "action", "query",
+                "format", "xml",
+                "meta", "tokens",
+                "type", type);
+
+            XmlDocument doc = new XmlDocument();
+            doc.LoadXml(xml);
+
+            if (doc.SelectNodes("/api/error").Count == 1)
+                return null;
+
+            return doc.SelectNodes("/api/query/tokens")[0].Attributes[type + "token"].InnerText;
         }
     }
 }

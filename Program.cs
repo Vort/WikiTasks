@@ -1,14 +1,12 @@
 ﻿using LinqToDB;
 using LinqToDB.Mapping;
-using Newtonsoft.Json.Linq;
 using System;
 using System.Collections.Generic;
-using System.Globalization;
+using System.IO;
 using System.Linq;
 using System.Net;
+using System.Text;
 using System.Text.RegularExpressions;
-using System.Threading;
-using System.Threading.Tasks;
 using System.Xml;
 
 namespace WikiTasks
@@ -20,19 +18,6 @@ namespace WikiTasks
         Failure = 2
     }
 
-    [Table(Name = "Items")]
-    public class DbItem
-    {
-        [PrimaryKey]
-        public int Id;
-        [Column()]
-        public string SrcData;
-        [Column()]
-        public string ReplData;
-        [Column()]
-        public ProcessStatus Status;
-    };
-
     [Table(Name = "Articles")]
     public class Article
     {
@@ -43,16 +28,17 @@ namespace WikiTasks
         [Column()]
         public string Title;
         [Column()]
-        public string WikiText;
+        public string SrcWikiText;
         [Column()]
-        public int ItemId;
+        public string ReplWikiText;
+        [Column()]
+        public ProcessStatus Status;
     };
 
     public class Db : LinqToDB.Data.DataConnection
     {
         public Db() : base("Db") { }
 
-        public ITable<DbItem> Items { get { return GetTable<DbItem>(); } }
 
         public ITable<Article> Articles { get { return GetTable<Article>(); } }
     }
@@ -61,11 +47,7 @@ namespace WikiTasks
     class Program
     {
         MwApi wpApi;
-        MwApi wdApi;
         static Db db;
-
-        const int editsPerMinute = 120;
-        const int connectionsLimit = 4;
 
         string csrfToken;
 
@@ -90,27 +72,10 @@ namespace WikiTasks
             return chunks;
         }
 
-        string GetToken(string type)
-        {
-            string xml = wdApi.PostRequest(
-                "action", "query",
-                "format", "xml",
-                "meta", "tokens",
-                "type", type);
-
-            XmlDocument doc = new XmlDocument();
-            doc.LoadXml(xml);
-
-            if (doc.SelectNodes("/api/error").Count == 1)
-                return null;
-
-            return doc.SelectNodes("/api/query/tokens")[0].Attributes[type + "token"].InnerText;
-        }
-
         void ObtainEditToken()
         {
             Console.Write("Authenticating...");
-            csrfToken = GetToken("csrf");
+            csrfToken = wpApi.GetToken("csrf");
             if (csrfToken == null)
             {
                 Console.WriteLine(" Failed");
@@ -142,7 +107,7 @@ namespace WikiTasks
                 article.PageId = int.Parse(pageNode.Attributes["pageid"].InnerText);
 
                 XmlNode revNode = pageNode.SelectSingleNode("revisions/rev");
-                article.WikiText = revNode.InnerText;
+                article.SrcWikiText = revNode.InnerText;
                 if (revNode.Attributes["timestamp"] != null)
                     article.Timestamp = revNode.Attributes["timestamp"].InnerText;
 
@@ -180,258 +145,161 @@ namespace WikiTasks
             Console.WriteLine(" Done");
         }
 
-        void DownloadItems(QId[] ids)
+        List<int> SearchArticles(string query, string ns = "0")
         {
-            if (HaveTable("Items"))
-                db.DropTable<DbItem>();
-            db.CreateTable<DbItem>();
+            var idList = new List<int>();
 
-            Console.Write("Downloading items");
-            var chunks = SplitToChunks(ids, 50);
-            foreach (var chunk in chunks)
+            Console.Write("Searching articles");
+            string sroffset = "";
+            for (;;)
             {
-                string json = wdApi.PostRequest(
-                    "action", "wbgetentities",
-                    "format", "json",
-                    "ids", string.Join("|", chunk),
-                    "redirects", "no");
+                string xml = wpApi.PostRequest(
+                    "action", "query",
+                    "list", "search",
+                    "srwhat", "text",
+                    "srsearch", query,
+                    "srprop", "",
+                    "srinfo", "",
+                    "srlimit", "100",
+                    "sroffset", sroffset,
+                    "srnamespace", ns,
+                    "format", "xml");
                 Console.Write('.');
 
-                var obj = JObject.Parse(json);
+                XmlDocument doc = new XmlDocument();
+                doc.LoadXml(xml);
 
-                if (obj.Count != 2)
-                    throw new Exception();
-                if ((int)obj["success"] != 1)
-                    throw new Exception();
-                if (!obj["entities"].All(t => t is JProperty))
-                    throw new Exception();
-                db.BeginTransaction();
-                foreach (JToken t in obj["entities"])
+                foreach (XmlNode pNode in doc.SelectNodes("/api/query/search/p"))
                 {
-                    var kv = t as JProperty;
-                    db.Insert(new DbItem
-                    {
-                        Id = new QId(kv.Name).Id,
-                        SrcData = kv.Value.ToString()
-                    });
+                    int id = int.Parse(pNode.Attributes["pageid"].InnerText);
+                    idList.Add(id);
                 }
-                db.CommitTransaction();
+
+                XmlNode contNode = doc.SelectSingleNode("/api/continue");
+                if (contNode == null)
+                    break;
+                sroffset = contNode.Attributes["sroffset"].InnerText;
             }
             Console.WriteLine(" Done");
+
+            return idList;
         }
 
-        bool FixDate(Dictionary<PId, List<Claim>> claims,
-            string wikiText, int propertyId, string paramName)
+        bool EditPage(string csrfToken, string timestamp, string title, string summary, string text)
         {
-            var p = new PId(propertyId);
+            string xml = wpApi.PostRequest(
+                "action", "edit",
+                "format", "xml",
+                "bot", "true",
+                "title", title,
+                "summary", summary,
+                "text", text,
+                "basetimestamp", timestamp,
+                "token", csrfToken);
 
-            if (!claims.ContainsKey(p))
+            XmlDocument doc = new XmlDocument();
+            doc.LoadXml(xml);
+
+            if (doc.SelectNodes("/api/error").Count == 1)
                 return false;
+            return doc.SelectSingleNode("/api/edit").Attributes["result"].InnerText == "Success";
+        }
 
-            var pcs = claims[p];
-            if (pcs.Count != 1)
-                return false;
+        void ProcessArticles()
+        {
+            var repls = new Dictionary<string, string>();
+            var articles = db.Articles.ToArray();
 
-            var c = pcs[0];
-
-            if (c.Qualifiers == null)
-                return false;
-
-            if (c.Qualifiers.Count != 1)
-                return false;
-
-            var q = c.Qualifiers[0];
-
-            if (q.Count != 1)
-                return false;
-
-            var s = q[0];
-
-            if (s.Property.Id != 31)
-                return false;
-
-            if ((s.DataValue.Value as QId).Id != 26932615)
-                return false;
-
-            var wdt = c.MainSnak.DataValue.Value as WdTime;
-            if (wdt.Precision != 11)
-                return false;
-            if (wdt.Time[0] != '+')
-                return false;
-
-            if (wdt.CalendarModel != "http://www.wikidata.org/entity/Q1985786")
-                return false;
-
-            var matches = Regex.Matches(wikiText,
-                $"\\| *{paramName} *= *([0-9]+)\\.([0-9]+)\\.([0-9]+) ?" +
-                "\\(([0-9]{1,2})(\\.([0-9]{1,2}))?(\\.([0-9]{4}))?\\)",
-                RegexOptions.IgnoreCase);
-            if (matches.Count != 1)
-                return false;
-
-            var match = matches[0];
-            int gDay = int.Parse(match.Groups[1].Value);
-            int gMonth = int.Parse(match.Groups[2].Value);
-            int gYear = int.Parse(match.Groups[3].Value);
-            int jDay = int.Parse(match.Groups[4].Value);
-            int? jMonth = null;
-            int? jYear = null;
-            if (match.Groups[6].Value != "")
-                jMonth = int.Parse(match.Groups[6].Value);
-            if (match.Groups[8].Value != "")
-                jYear = int.Parse(match.Groups[8].Value);
-
-            DateTime t;
-            if (!DateTime.TryParse(wdt.Time.Substring(1),
-                CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out t))
+            foreach (var article in articles)
             {
-                return false;
+                var matches = Regex.Matches(
+                    article.SrcWikiText, "www\\.gramota\\.ru/slovari/dic/\\?([^ |\\]}\\n'<]+)");
+                if (matches.Count == 0)
+                    throw new Exception();
+                for (int i = 0; i < matches.Count; i++)
+                {
+                    string part = matches[i].Groups[1].Value;
+                    if (!Regex.IsMatch(part, "%[0-9a-fA-F]"))
+                        continue;
+                    if (Regex.IsMatch(part, "%[0-9a-fA-F]{4}"))
+                        continue;
+                    repls[part] = part;
+                }
             }
 
-            if (t.Day != gDay)
-                return false;
-            if (t.Month != gMonth)
-                return false;
-            if (t.Year != gYear)
-                return false;
-
-            var jc = new JulianCalendar();
-            DateTime jt = new DateTime(jc.GetYear(t), jc.GetMonth(t), jc.GetDayOfMonth(t));
-
-            if (jt.Day != jDay)
-                return false;
-            if (jMonth != null && jMonth != jt.Month)
-                return false;
-            if (jYear != null && jYear != jt.Year)
-                return false;
-
-            wdt.Time = "+" + jt.ToString("s") + "Z";
-            c.Qualifiers = null;
-
-            if (c.References == null)
-                c.References = new List<Reference> { new Reference(new PId(143), new QId(206855)) };
-
-            return true;
-        }
-
-        void FillReplData()
-        {
-            int i = 0;
-            int replCnt = 0;
-
-            Console.Write("Processing articles");
-            var dba = db.Items.Where(dbi => dbi.Status == ProcessStatus.NotProcessed).ToArray();
-            db.BeginTransaction();
-            foreach (var dbi in dba)
+            foreach (var repl in repls.Keys.ToArray())
             {
-                var item = new Item(dbi.SrcData);
-                var json2 = item.ToString();
-                if (!JToken.DeepEquals(JObject.Parse(json2), JObject.Parse(dbi.SrcData)))
-                    throw new Exception();
-
-                var article = db.Articles.First(a => a.ItemId == item.Id.Id);
-
-                bool bf = FixDate(item.Claims, article.WikiText, 569, "Дата рождения");
-                bool df = FixDate(item.Claims, article.WikiText, 570, "Дата смерти");
-
-                if (bf || df)
+                string result = repl;
+                bool utf8 = repl.Contains("%D0");
+                if (!utf8)
                 {
-                    dbi.ReplData = item.ToString();
-                    db.Update(dbi);
-                    replCnt++;
+                    for (int i = 0xC0; i <= 0xFF; i++)
+                        result = result.Replace($"%{i:X2}",
+                            Encoding.GetEncoding(1251).GetChars(new byte[] { (byte)i })[0].ToString());
+                    result = result.Replace("%A8", "Ё");
+                    result = result.Replace("%B8", "ё");
                 }
-                i++;
-                if (i % 50 == 0)
-                    Console.Write('.');
+                else
+                {
+                    for (int i = 0x400; i <= 0x460; i++)
+                    {
+                        byte b1 = (byte)((i >> 6) & 0x1F | 0xD0);
+                        byte b2 = (byte)(i & 0x3F | 0x80);
+                        result = result.Replace($"%{b1:X2}%{b2:X2}",
+                            Encoding.UTF8.GetChars(new byte[] { b1, b2 })[0].ToString());
+                    }
+                }
+                repls[repl] = result;
+            }
+
+            db.BeginTransaction();
+            foreach (var article in articles)
+            {
+                string result = article.SrcWikiText;
+                foreach (var replkv in repls)
+                    result = result.Replace(replkv.Key, replkv.Value);
+                if (result != article.SrcWikiText)
+                {
+                    article.ReplWikiText = result;
+                    db.Update(article);
+                }
             }
             db.CommitTransaction();
-            Console.WriteLine(" Done");
-            Console.WriteLine($"Replacements: {replCnt}");
-        }
-
-        async Task<bool> UpdateEntity(Item item, string summary)
-        {
-            string json = await wdApi.PostRequestAsync(
-                "action", "wbeditentity",
-                "format", "json",
-                "id", item.Id.ToString(),
-                "baserevid", item.LastRevId.ToString(),
-                "summary", summary,
-                "token", csrfToken,
-                "bot", "1",
-                "data", item.ToString(),
-                "clear", "1");
-
-            var obj = JObject.Parse(json);
-            return obj["success"] != null;
         }
 
         void MakeReplacements()
         {
-            var tasks = new List<Task>();
             Console.Write("Making replacements");
-            foreach (var dbi in db.Items.Where(i => i.Status == 0 && i.ReplData != null).Take(5).ToArray())
-            {
-                if (tasks.Any(t => t.IsFaulted))
-                    Task.WaitAll(tasks.ToArray());
-                tasks.RemoveAll(t => t.IsCompleted);
+            var articles = db.Articles.
+                Where(a => a.Status == ProcessStatus.NotProcessed && a.ReplWikiText != null).
+                OrderBy(a => a.Title).ToArray();
 
-                Task<bool> updateTask = UpdateEntity(new Item(dbi.ReplData),
-                    "Reimport julian dates from ruwiki");
-                tasks.Add(updateTask);
-                tasks.Add(updateTask.ContinueWith(cont =>
-                {
-                    bool isUpdateSuccessful = cont.Result;
-                    lock (db)
-                    {
-                        Console.Write(isUpdateSuccessful ? '.' : 'x');
-                        dbi.Status = isUpdateSuccessful ? ProcessStatus.Success : ProcessStatus.Failure;
-                        db.Update(dbi);
-                    }
-                }));
-                Thread.Sleep(60 * 1000 / editsPerMinute);
+            foreach (var article in articles)
+            {
+                bool isEditSuccessful = EditPage(csrfToken, article.Timestamp,
+                    article.Title, "исправление ссылок gramota.ru", article.ReplWikiText);
+                article.Status = isEditSuccessful ? ProcessStatus.Success : ProcessStatus.Failure;
+                db.Update(article);
+                Console.Write(isEditSuccessful ? '.' : 'x');
             }
-            Task.WaitAll(tasks.ToArray());
+
             Console.WriteLine(" Done");
         }
 
         Program()
         {
-            Console.Write("Obtaining article list...");
-            var petRes = PetScan.Query(
-                "language", "ru",
-                "sparql", "SELECT ?item WHERE { { ?item p:P569 ?s1 . ?s1 pq:P31 wd:Q26932615 } UNION { ?item p:P570 ?s2 . ?s2 pq:P31 wd:Q26932615 } } GROUP BY ?item ORDER BY ?item",
-                "common_wiki", "cats",
-                "wikidata_item", "with");
-            Console.WriteLine(" Done");
-
             wpApi = new MwApi("ru.wikipedia.org");
 
+            var ids = SearchArticles("insource:\"www.gramota.ru/slovari/dic/?\"");
+            DownloadArticles(ids.ToArray());
 
-            DownloadArticles(petRes.Select(r => r.Id).ToArray());
-
-            var articles = db.Articles.ToArray();
-            db.BeginTransaction();
-            foreach (Article a in articles)
-            {
-                a.ItemId = new QId(petRes.First(r => r.Id == a.PageId).WikidataItem).Id;
-                db.Update(a);
-            }
-            db.CommitTransaction();
-
-            wdApi = new MwApi("www.wikidata.org");
+            ProcessArticles();
             ObtainEditToken();
-
-            DownloadItems(db.Articles.ToArray().Select(a => new QId(a.ItemId)).ToArray());
-
-            FillReplData();
-
             MakeReplacements();
         }
 
         static void Main(string[] args)
         {
-            ServicePointManager.DefaultConnectionLimit = connectionsLimit;
             db = new Db();
             new Program();
             db.Dispose();
