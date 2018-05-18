@@ -1,12 +1,14 @@
-﻿using LinqToDB;
+﻿using Antlr4.Runtime;
+using LinqToDB;
 using LinqToDB.Mapping;
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.IO;
 using System.Linq;
-using System.Net;
 using System.Text;
-using System.Text.RegularExpressions;
+using System.Threading;
+using System.Threading.Tasks;
 using System.Xml;
 
 namespace WikiTasks
@@ -15,7 +17,8 @@ namespace WikiTasks
     {
         NotProcessed = 0,
         Success = 1,
-        Failure = 2
+        Failure = 2,
+        Skipped = 3
     }
 
     [Table(Name = "Articles")]
@@ -30,19 +33,81 @@ namespace WikiTasks
         [Column()]
         public string SrcWikiText;
         [Column()]
-        public string ReplWikiText;
+        public int ReplIndex1;
+        [Column()]
+        public int ReplIndex2;
+        [Column()]
+        public string NewTemplateText;
         [Column()]
         public ProcessStatus Status;
+
+
+        public List<string> Errors;
     };
 
     public class Db : LinqToDB.Data.DataConnection
     {
         public Db() : base("Db") { }
 
-
         public ITable<Article> Articles { get { return GetTable<Article>(); } }
     }
 
+    class TemplateParam
+    {
+        public bool Newline;
+        public int Sp1;
+        public int Sp2;
+        public string Name;
+        public int Sp3;
+        public int Sp4;
+        public string Value;
+    }
+
+    class Template
+    {
+        public Template()
+        {
+            Params = new List<TemplateParam>();
+        }
+
+        public TemplateParam this[string name]
+        {
+            get
+            {
+                return Params.FirstOrDefault(p => p.Name == name);
+            }
+        }
+
+        public void InsertAfter(TemplateParam param, TemplateParam newParam)
+        {
+            Params.Insert(Params.FindIndex(p => p == param) + 1, newParam);
+        }
+
+        public override string ToString()
+        {
+            var sb = new StringBuilder();
+            sb.Append("{{");
+            sb.Append(Name);
+            foreach (var param in Params)
+            {
+                if (param.Newline)
+                    sb.Append('\n');
+                sb.Append(new string(' ', param.Sp1));
+                sb.Append('|');
+                sb.Append(new string(' ', param.Sp2));
+                sb.Append(param.Name);
+                sb.Append(new string(' ', param.Sp3));
+                sb.Append('=');
+                sb.Append(new string(' ', param.Sp4));
+                sb.Append(param.Value);
+            }
+            sb.Append("\n}}");
+            return sb.ToString();
+        }
+
+        public string Name;
+        public List<TemplateParam> Params;
+    }
 
     class Program
     {
@@ -145,31 +210,28 @@ namespace WikiTasks
             Console.WriteLine(" Done");
         }
 
-        List<int> SearchArticles(string query, string ns = "0")
+        List<int> ScanCategory(string category)
         {
             var idList = new List<int>();
 
-            Console.Write("Searching articles");
-            string sroffset = "";
+            string continueParam = "";
+            Console.Write("Scanning category");
             for (;;)
             {
                 string xml = wpApi.PostRequest(
-                    "action", "query",
-                    "list", "search",
-                    "srwhat", "text",
-                    "srsearch", query,
-                    "srprop", "",
-                    "srinfo", "",
-                    "srlimit", "100",
-                    "sroffset", sroffset,
-                    "srnamespace", ns,
+                    "action","query",
+                    "list", "categorymembers",
+                    "cmprop", "ids",
+                    "cmtitle", category,
+                    "cmlimit", "500",
+                    "cmcontinue", continueParam,
                     "format", "xml");
                 Console.Write('.');
 
                 XmlDocument doc = new XmlDocument();
                 doc.LoadXml(xml);
 
-                foreach (XmlNode pNode in doc.SelectNodes("/api/query/search/p"))
+                foreach (XmlNode pNode in doc.SelectNodes("/api/query/categorymembers/cm"))
                 {
                     int id = int.Parse(pNode.Attributes["pageid"].InnerText);
                     idList.Add(id);
@@ -178,7 +240,7 @@ namespace WikiTasks
                 XmlNode contNode = doc.SelectSingleNode("/api/continue");
                 if (contNode == null)
                     break;
-                sroffset = contNode.Attributes["sroffset"].InnerText;
+                continueParam = contNode.Attributes["cmcontinue"].InnerText;
             }
             Console.WriteLine(" Done");
 
@@ -207,73 +269,84 @@ namespace WikiTasks
 
         void ProcessArticles()
         {
-            var repls = new Dictionary<string, string>();
+            int processed = 0;
+            int lexerErrors = 0;
+            int parserErrors = 0;
+
             var articles = db.Articles.ToArray();
-
-            foreach (var article in articles)
+            foreach (Article article in articles)
             {
-                var matches = Regex.Matches(
-                    article.SrcWikiText, "gramota\\.ru/slovari/dic[/]?\\?([^ |\\]}\\n'<]+)");
-                if (matches.Count == 0)
-                    throw new Exception();
-                for (int i = 0; i < matches.Count; i++)
-                {
-                    string part = matches[i].Groups[1].Value;
-                    if (!Regex.IsMatch(part, "%[0-9a-fA-F]{2,4}"))
-                        continue;
-                    repls[part] = part;
-                }
+                article.ReplIndex1 = 0;
+                article.ReplIndex2 = 0;
+                article.NewTemplateText = null;
+                if (article.Status == ProcessStatus.Skipped)
+                    article.Status = ProcessStatus.NotProcessed;
             }
 
-            foreach (var repl in repls.Keys.ToArray())
+            Console.Write("Parsing articles");
+            Stopwatch stopwatch = new Stopwatch();
+            stopwatch.Start();
+            Parallel.ForEach(articles, article =>
             {
-                string result = repl;
-                for (int i = 0; i < 2; i++)
-                {
-                    if (Regex.IsMatch(result, "%25[0-9a-fA-F]{2}"))
-                        result = Regex.Replace(result, "%25([0-9a-fA-F]{2})", "%$1");
-                }
-                bool utf8 = Regex.Matches(result, "%D[01]").Count > 1;
-                if (!utf8)
-                {
-                    for (int i = 0xC0; i <= 0xFF; i++)
-                    {
-                        string decChar = Encoding.GetEncoding(1251).
-                            GetChars(new byte[] { (byte)i })[0].ToString();
-                        result = result.Replace($"%{i:X2}", decChar);
-                    }
-                    result = result.Replace("%A8", "Ё");
-                    result = result.Replace("%B8", "ё");
-                    result = result.Replace("%3F", "?");
-                    result = result.Replace("%2A", "*");
-                }
-                else
-                {
-                    for (int i = 0x400; i <= 0x460; i++)
-                    {
-                        byte b1 = (byte)((i >> 6) & 0x1F | 0xD0);
-                        byte b2 = (byte)(i & 0x3F | 0x80);
-                        result = result.Replace($"%{b1:X2}%{b2:X2}",
-                            Encoding.UTF8.GetChars(new byte[] { b1, b2 })[0].ToString());
-                    }
-                }
-                repls[repl] = result;
+                AntlrErrorListener ael = new AntlrErrorListener();
+                AntlrInputStream inputStream = new AntlrInputStream(article.SrcWikiText);
+                WikiLexer lexer = new WikiLexer(inputStream);
+                lexer.RemoveErrorListeners();
+                lexer.AddErrorListener(ael);
+                CommonTokenStream commonTokenStream = new CommonTokenStream(lexer);
+                WikiParser parser = new WikiParser(commonTokenStream);
+                parser.RemoveErrorListeners();
+                parser.AddErrorListener(ael);
+                WikiParser.InitContext initContext = parser.init();
+                WikiVisitor visitor = new WikiVisitor(article);
+                visitor.VisitInit(initContext);
+                article.Errors = ael.ErrorList;
+
+                Interlocked.Add(ref lexerErrors, ael.LexerErrors);
+                Interlocked.Add(ref parserErrors, ael.ParserErrors);
+
+                if (Interlocked.Increment(ref processed) % 50 == 0)
+                    Console.Write('.');
+            });
+            stopwatch.Stop();
+
+            Console.WriteLine(" Done");
+            Console.WriteLine(" Articles: " + articles.Count());
+            Console.WriteLine(" Replacements count: " + articles.Count(a => a.NewTemplateText != null));
+            Console.WriteLine(" Parser errors: " + parserErrors);
+            Console.WriteLine(" Lexer errors: " + lexerErrors);
+            Console.WriteLine(" Parsing time: " + stopwatch.Elapsed.TotalSeconds + " sec");
+            Console.WriteLine();
+
+            List<string> errorLog = new List<string>();
+            foreach (Article article in articles)
+            {
+                if (article.Errors == null)
+                    continue;
+                if (article.Errors.Count == 0)
+                    continue;
+                errorLog.Add("Статья: " + article.Title);
+                errorLog.AddRange(article.Errors);
+            }
+            File.WriteAllLines("error_log.txt", errorLog.ToArray(), Encoding.UTF8);
+
+            var sb1 = new StringBuilder();
+            var sb2 = new StringBuilder();
+            foreach (Article article in articles.Where(a => a.Status == ProcessStatus.NotProcessed))
+            {
+                sb1.Append(article.SrcWikiText.Substring(
+                    article.ReplIndex1, article.ReplIndex2 - article.ReplIndex1));
+                sb1.Append("\n\n");
+                sb2.Append(article.NewTemplateText);
+                sb2.Append("\n\n");
             }
 
-            File.WriteAllLines("fragments.txt", repls.Values);
+            File.WriteAllText("src_templates.txt", sb1.ToString(), Encoding.UTF8);
+            File.WriteAllText("new_templates.txt", sb2.ToString(), Encoding.UTF8);
 
             db.BeginTransaction();
             foreach (var article in articles)
-            {
-                string result = article.SrcWikiText;
-                foreach (var replkv in repls)
-                    result = result.Replace(replkv.Key, replkv.Value);
-                if (result != article.SrcWikiText)
-                {
-                    article.ReplWikiText = result;
-                    db.Update(article);
-                }
-            }
+                db.Update(article);
             db.CommitTransaction();
         }
 
@@ -281,13 +354,17 @@ namespace WikiTasks
         {
             Console.Write("Making replacements");
             var articles = db.Articles.
-                Where(a => a.Status == ProcessStatus.NotProcessed && a.ReplWikiText != null).
+                Where(a => a.Status == ProcessStatus.NotProcessed && a.NewTemplateText != null).
                 OrderBy(a => a.Title).ToArray();
 
             foreach (var article in articles)
             {
+                string ReplWikiText =
+                    article.SrcWikiText.Substring(0, article.ReplIndex1) +
+                    article.NewTemplateText +
+                    article.SrcWikiText.Substring(article.ReplIndex2);
                 bool isEditSuccessful = EditPage(csrfToken, article.Timestamp,
-                    article.Title, "исправление ссылок gramota.ru", article.ReplWikiText);
+                    article.Title, "исправление карточки", ReplWikiText);
                 article.Status = isEditSuccessful ? ProcessStatus.Success : ProcessStatus.Failure;
                 db.Update(article);
                 Console.Write(isEditSuccessful ? '.' : 'x');
@@ -300,9 +377,8 @@ namespace WikiTasks
         {
             wpApi = new MwApi("ru.wikipedia.org");
 
-            var ids = SearchArticles("insource:\"gramota.ru/slovari/dic\"");
+            var ids = ScanCategory("Категория:ПРО:Города:Поломанные карточки");
             DownloadArticles(ids.ToArray());
-
             ProcessArticles();
             ObtainEditToken();
             MakeReplacements();
