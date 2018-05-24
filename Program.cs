@@ -1,4 +1,5 @@
 ﻿using Antlr4.Runtime;
+using Antlr4.Runtime.Tree;
 using LinqToDB;
 using LinqToDB.Mapping;
 using System;
@@ -22,7 +23,7 @@ namespace WikiTasks
     }
 
     [Table(Name = "Articles")]
-    public class Article
+    class Article
     {
         [PrimaryKey]
         public int PageId;
@@ -43,9 +44,10 @@ namespace WikiTasks
 
 
         public List<string> Errors;
+        public Template Template;
     };
 
-    public class Db : LinqToDB.Data.DataConnection
+    class Db : LinqToDB.Data.DataConnection
     {
         public Db() : base("Db") { }
 
@@ -61,6 +63,7 @@ namespace WikiTasks
         public int Sp3;
         public int Sp4;
         public string Value;
+        public IParseTree[] ValueTrees;
     }
 
     class Template
@@ -74,7 +77,31 @@ namespace WikiTasks
         {
             get
             {
-                return Params.FirstOrDefault(p => p.Name == name);
+                var pl = Params.Where(p => p.Name == name).ToArray();
+                if (pl.Length == 0)
+                    return null;
+                else if (pl.Length == 1)
+                    return pl[0];
+                else
+                    throw new Exception();
+            }
+        }
+
+        public void Reformat()
+        {
+            var v = Params.Where(p => p.Value != "").Select(p => p.Sp4).Distinct().ToArray();
+            bool std = v.Length == 1 && v[0] == 1;
+
+            for (int i = 1; i < Params.Count; i++)
+            {
+                if (Params[i].Newline &&
+                    Params[i - 1].Value == "")
+                {
+                    if (std)
+                        Params[i - 1].Sp4 = 1;
+                    else
+                        Params[i - 1].Sp4 = Params[i - 1].Sp4 >= 1 ? 1 : 0;
+                }
             }
         }
 
@@ -210,28 +237,31 @@ namespace WikiTasks
             Console.WriteLine(" Done");
         }
 
-        List<int> ScanCategory(string category)
+        List<int> SearchArticles(string query, string ns = "0")
         {
             var idList = new List<int>();
 
-            string continueParam = "";
-            Console.Write("Scanning category");
+            Console.Write("Searching articles");
+            string sroffset = "";
             for (;;)
             {
                 string xml = wpApi.PostRequest(
-                    "action","query",
-                    "list", "categorymembers",
-                    "cmprop", "ids",
-                    "cmtitle", category,
-                    "cmlimit", "500",
-                    "cmcontinue", continueParam,
+                    "action", "query",
+                    "list", "search",
+                    "srwhat", "text",
+                    "srsearch", query,
+                    "srprop", "",
+                    "srinfo", "",
+                    "srlimit", "100",
+                    "sroffset", sroffset,
+                    "srnamespace", ns,
                     "format", "xml");
                 Console.Write('.');
 
                 XmlDocument doc = new XmlDocument();
                 doc.LoadXml(xml);
 
-                foreach (XmlNode pNode in doc.SelectNodes("/api/query/categorymembers/cm"))
+                foreach (XmlNode pNode in doc.SelectNodes("/api/query/search/p"))
                 {
                     int id = int.Parse(pNode.Attributes["pageid"].InnerText);
                     idList.Add(id);
@@ -240,7 +270,7 @@ namespace WikiTasks
                 XmlNode contNode = doc.SelectSingleNode("/api/continue");
                 if (contNode == null)
                     break;
-                continueParam = contNode.Attributes["cmcontinue"].InnerText;
+                sroffset = contNode.Attributes["sroffset"].InnerText;
             }
             Console.WriteLine(" Done");
 
@@ -298,7 +328,7 @@ namespace WikiTasks
                 parser.RemoveErrorListeners();
                 parser.AddErrorListener(ael);
                 WikiParser.InitContext initContext = parser.init();
-                WikiVisitor visitor = new WikiVisitor(article);
+                WikiVisitor visitor = new WikiVisitor(article, "Впадающие реки");
                 visitor.VisitInit(initContext);
                 article.Errors = ael.ErrorList;
 
@@ -312,11 +342,9 @@ namespace WikiTasks
 
             Console.WriteLine(" Done");
             Console.WriteLine(" Articles: " + articles.Count());
-            Console.WriteLine(" Replacements count: " + articles.Count(a => a.NewTemplateText != null));
             Console.WriteLine(" Parser errors: " + parserErrors);
             Console.WriteLine(" Lexer errors: " + lexerErrors);
             Console.WriteLine(" Parsing time: " + stopwatch.Elapsed.TotalSeconds + " sec");
-            Console.WriteLine();
 
             List<string> errorLog = new List<string>();
             foreach (Article article in articles)
@@ -330,9 +358,43 @@ namespace WikiTasks
             }
             File.WriteAllLines("error_log.txt", errorLog.ToArray(), Encoding.UTF8);
 
+            Console.Write("Processing...");
+            foreach (Article article in articles)
+            {
+                article.Template.Reformat();
+
+                var inr = article.Template["Впадающие реки"];
+                var outr = article.Template["Вытекающая река"];
+
+                bool changed = false;
+                if (inr != null)
+                    if (inr.Value == "отсутствуют" || inr.Value == "нет")
+                    {
+                        inr.Value = "";
+                        changed = true;
+                    }
+                if (outr != null)
+                    if (outr.Value == "отсутствуют" || outr.Value == "нет")
+                    {
+                        outr.Value = "";
+                        changed = true;
+                    }
+
+                if (!changed)
+                {
+                    article.Status = ProcessStatus.Skipped;
+                    continue;
+                }
+
+                article.NewTemplateText = article.Template.ToString();
+            }
+            Console.WriteLine(" Done");
+            Console.WriteLine(" Replacements count: " + articles.Count(a => a.NewTemplateText != null));
+
+
             var sb1 = new StringBuilder();
             var sb2 = new StringBuilder();
-            foreach (Article article in articles.Where(a => a.Status == ProcessStatus.NotProcessed))
+            foreach (Article article in articles.Where(a => a.Status != ProcessStatus.Skipped))
             {
                 sb1.Append(article.SrcWikiText.Substring(
                     article.ReplIndex1, article.ReplIndex2 - article.ReplIndex1));
@@ -364,7 +426,7 @@ namespace WikiTasks
                     article.NewTemplateText +
                     article.SrcWikiText.Substring(article.ReplIndex2);
                 bool isEditSuccessful = EditPage(csrfToken, article.Timestamp,
-                    article.Title, "исправление карточки", ReplWikiText);
+                    article.Title, "удаление неверно заполненных параметров", ReplWikiText);
                 article.Status = isEditSuccessful ? ProcessStatus.Success : ProcessStatus.Failure;
                 db.Update(article);
                 Console.Write(isEditSuccessful ? '.' : 'x');
@@ -376,8 +438,7 @@ namespace WikiTasks
         Program()
         {
             wpApi = new MwApi("ru.wikipedia.org");
-
-            var ids = ScanCategory("Категория:ПРО:Города:Поломанные карточки");
+            var ids = SearchArticles("incategory:Водные_объекты_по_алфавиту insource:/рек[а-и] *= *(нет|отс)/");
             DownloadArticles(ids.ToArray());
             ProcessArticles();
             ObtainEditToken();
