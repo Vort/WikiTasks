@@ -188,6 +188,7 @@ namespace WikiTasks
                 article.Template += "|" + match.Groups[9].Value;
                 foreach (var month in match.Groups[11].Captures)
                     article.Template += "|" + month.ToString().Replace('.', ',');
+                article.Template += "|годовой=нет";
                 if (match.Groups[2].Value != "")
                     article.Template += "|с=" + match.Groups[3].Value;
                 if (match.Groups[3].Value != "")
@@ -195,19 +196,23 @@ namespace WikiTasks
                 article.Template += "|пост=}}";
             }
 
+            var fltArticles = articles.Where(a => a.Template != null).ToArray();
+
             var sb = new StringBuilder();
             sb.AppendLine("{|class=\"wide\" style=\"table-layout: fixed;word-wrap:break-word\"");
             sb.AppendLine("!width=\"28px\"|№");
             sb.AppendLine("!width=\"20%\"|Статья");
             sb.AppendLine("!width=\"80%\"|Шаблон");
-            for (int i = 0; i < articles.Length; i++)
+            for (int i = 0; i < fltArticles.Length; i++)
             {
                 sb.AppendLine("|-");
                 sb.AppendLine("|" + (i + 1));
-                sb.AppendLine("|[[" + articles[i].Title + "]]");
-                sb.AppendLine("|<small><code><nowiki>" + articles[i].Template + "</nowiki></code></small>");
+                sb.AppendLine("|[[" + fltArticles[i].Title + "]]");
+                sb.AppendLine("|<small><code><nowiki>" + fltArticles[i].Template + "</nowiki></code></small>");
             }
             sb.AppendLine("|}");
+            sb.AppendLine();
+            sb.AppendLine("[[Категория:Проект:Водные объекты/Текущие события]]");
 
             File.WriteAllText("result.txt", sb.ToString());
             Console.WriteLine(" Done");
