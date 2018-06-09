@@ -107,7 +107,14 @@ namespace WikiTasks
 
         public void InsertAfter(TemplateParam param, TemplateParam newParam)
         {
+            if (Params.Where(p => p.Name == newParam.Name).Count() != 0)
+                throw new Exception();
             Params.Insert(Params.FindIndex(p => p == param) + 1, newParam);
+        }
+
+        public void Remove(string paramName)
+        {
+            Params.RemoveAll(p => p.Name == paramName);
         }
 
         public override string ToString()
@@ -328,7 +335,7 @@ namespace WikiTasks
                 parser.RemoveErrorListeners();
                 parser.AddErrorListener(ael);
                 WikiParser.InitContext initContext = parser.init();
-                WikiVisitor visitor = new WikiVisitor(article, "Впадающие реки");
+                WikiVisitor visitor = new WikiVisitor(article, "Регион");
                 visitor.VisitInit(initContext);
                 article.Errors = ael.ErrorList;
 
@@ -363,29 +370,53 @@ namespace WikiTasks
             {
                 article.Template.Reformat();
 
-                var inr = article.Template["Впадающие реки"];
-                var outr = article.Template["Вытекающая река"];
+                article.Template.Remove("Карта");
+                article.Template.Remove("размер");
+                article.Template.Remove("на карте google");
+                article.Template.Remove("на карте яндекс");
+                article.Template.Remove("на карте Яндекс");
+                article.Template.Remove("Ширина");
+                article.Template.Remove("region");
+                article.Template.Remove("Проезд");
 
-                bool changed = false;
-                if (inr != null)
-                    if (inr.Value == "отсутствуют" || inr.Value == "нет")
-                    {
-                        inr.Value = "";
-                        changed = true;
-                    }
-                if (outr != null)
-                    if (outr.Value == "отсутствуют" || outr.Value == "нет")
-                    {
-                        outr.Value = "";
-                        changed = true;
-                    }
+                var str = article.Template["Страна"];
+                var reg = article.Template["Регион"];
+                var ra = article.Template["Район"];
 
-                if (!changed)
+                if (str.Value != "Россия")
+                    throw new Exception();
+                if (reg.Value != "Москва" && reg.Value != "Санкт-Петербург")
+                    throw new Exception();
+                if (ra.Value == "")
+                    throw new Exception();
+
+                var gor = new TemplateParam
                 {
-                    article.Status = ProcessStatus.Skipped;
-                    continue;
-                }
+                    Name = "Город",
+                    Newline = true,
+                    Sp1 = str.Sp1,
+                    Sp2 = str.Sp2,
+                    Sp3 = str.Sp3 + 1,
+                    Sp4 = str.Sp4,
+                    Value = reg.Value
+                };
 
+                var ragor = new TemplateParam
+                {
+                    Name = "Район города",
+                    Newline = true,
+                    Sp1 = reg.Sp1,
+                    Sp2 = reg.Sp2,
+                    Sp3 = Math.Max(reg.Sp3 - 6, 1),
+                    Sp4 = reg.Sp4,
+                    Value = ra.Value
+                };
+
+                reg.Value = "";
+                ra.Value = "";
+
+                article.Template.InsertAfter(ra, gor);
+                article.Template.InsertAfter(gor, ragor);
                 article.NewTemplateText = article.Template.ToString();
             }
             Console.WriteLine(" Done");
@@ -426,7 +457,7 @@ namespace WikiTasks
                     article.NewTemplateText +
                     article.SrcWikiText.Substring(article.ReplIndex2);
                 bool isEditSuccessful = EditPage(csrfToken, article.Timestamp,
-                    article.Title, "удаление неверно заполненных параметров", ReplWikiText);
+                    article.Title, "исправление карточки", ReplWikiText);
                 article.Status = isEditSuccessful ? ProcessStatus.Success : ProcessStatus.Failure;
                 db.Update(article);
                 Console.Write(isEditSuccessful ? '.' : 'x');
@@ -438,7 +469,7 @@ namespace WikiTasks
         Program()
         {
             wpApi = new MwApi("ru.wikipedia.org");
-            var ids = SearchArticles("incategory:Водные_объекты_по_алфавиту insource:/рек[а-и] *= *(нет|отс)/");
+            var ids = SearchArticles("insource:/Регион *= *(Москва|Санкт-Петербург)/ insource:/Район *= *[А-Яа-яЁё]/ hastemplate:Парк");
             DownloadArticles(ids.ToArray());
             ProcessArticles();
             ObtainEditToken();

@@ -23,7 +23,9 @@ namespace WikiTasks
 
         void Trim(string source, out int spaces1, out string trimmed, out bool newline, out int spaces2)
         {
-            var match = Regex.Match(source, "\\A( *)([^ ]|[^ ].*[^ ])?( *)\\z", RegexOptions.Singleline);
+            var match = Regex.Match(source,
+                "\\A([ \t]*)([^ \t]|[^ \t].*[^ \t])?([ \t]*)\\z",
+                RegexOptions.Singleline);
             spaces1 = match.Groups[1].Length;
             spaces2 = match.Groups[3].Length;
             trimmed = match.Groups[2].Value;
