@@ -7,10 +7,12 @@ using System.Xml;
 
 namespace WikiTasks
 {
-    class CategoryScanResult
+    class Article
     {
         public int PageId;
         public bool Flagged;
+        public List<string> Categories;
+        public List<string> Templates;
     }
 
     class Program
@@ -66,86 +68,6 @@ namespace WikiTasks
             return doc.SelectSingleNode("/api/query/pages/page/revisions/rev").InnerText;
         }
 
-        List<int> SearchArticles(string query, string ns = "0")
-        {
-            var idList = new List<int>();
-
-            string sroffset = "";
-            for (;;)
-            {
-                string xml = wpApi.PostRequest(
-                    "action", "query",
-                    "list", "search",
-                    "srwhat", "text",
-                    "srsearch", query,
-                    "srprop", "",
-                    "srinfo", "",
-                    "srlimit", "100",
-                    "sroffset", sroffset,
-                    "srnamespace", ns,
-                    "format", "xml");
-                Console.Write('.');
-
-                XmlDocument doc = new XmlDocument();
-                doc.LoadXml(xml);
-
-                foreach (XmlNode pNode in doc.SelectNodes("/api/query/search/p"))
-                {
-                    int id = int.Parse(pNode.Attributes["pageid"].InnerText);
-                    idList.Add(id);
-                }
-
-                XmlNode contNode = doc.SelectSingleNode("/api/continue");
-                if (contNode == null)
-                    break;
-                sroffset = contNode.Attributes["sroffset"].InnerText;
-            }
-
-            return idList;
-        }
-
-        int[] ScanCategory(string category)
-        {
-            return ScanCategoryG(category).Select(c => c.PageId).ToArray();
-        }
-
-        List<CategoryScanResult> ScanCategoryG(string category)
-        {
-            var idList = new List<CategoryScanResult>();
-
-            string continueParam = "";
-            for (;;)
-            {
-                string xml = wpApi.PostRequest(
-                    "action", "query",
-                    "generator", "categorymembers",
-                    "prop", "flagged",
-                    "gcmprop", "ids",
-                    "gcmtype", "page",
-                    "gcmtitle", category,
-                    "gcmlimit", "500",
-                    "gcmcontinue", continueParam,
-                    "format", "xml");
-                Console.Write('.');
-
-                XmlDocument doc = new XmlDocument();
-                doc.LoadXml(xml);
-
-                foreach (XmlNode node in doc.SelectNodes("/api/query/pages/page"))
-                {
-                    int id = int.Parse(node.Attributes["pageid"].InnerText);
-                    bool flagged = node.SelectNodes("flagged").Count != 0;
-                    idList.Add(new CategoryScanResult { PageId = id, Flagged = flagged });
-                }
-
-                XmlNode contNode = doc.SelectSingleNode("/api/continue");
-                if (contNode == null)
-                    break;
-                continueParam = contNode.Attributes["gcmcontinue"].InnerText;
-            }
-
-            return idList;
-        }
 
         List<string> GetSubCategories(string category)
         {
@@ -171,24 +93,6 @@ namespace WikiTasks
             return result;
         }
 
-        int GetCategoryPageCount(string category)
-        {
-            string xml = wpApi.PostRequest(
-                "action", "query",
-                "prop", "categoryinfo",
-                "titles", category,
-                "format", "xml");
-
-            XmlDocument doc = new XmlDocument();
-            doc.LoadXml(xml);
-
-            XmlNode ciNode = doc.SelectSingleNode("/api/query/pages/page/categoryinfo");
-            if (ciNode == null)
-                throw new Exception();
-            return int.Parse(ciNode.Attributes["pages"].InnerText);
-        }
-
-
         bool EditPage(string csrfToken, string title, string summary, string text)
         {
             string xml = wpApi.PostRequest(
@@ -208,69 +112,154 @@ namespace WikiTasks
             return doc.SelectSingleNode("/api/edit").Attributes["result"].InnerText == "Success";
         }
 
+        Article[] ScanCategoryA(string category,
+            string[] includeCategories,
+            string[] includeTemplates)
+        {
+            var articles = new Dictionary<int, Article>();
+
+            bool firstCatChunk = true;
+            foreach (var catChunk in SplitToChunks(includeCategories, 500))
+            {
+                string continueQuery = null;
+                string continueGcm = null;
+                string continueCl = null;
+                string continueTl = null;
+                for (;;)
+                {
+                    string xml = wpApi.PostRequest(
+                        "action", "query",
+                        "generator", "categorymembers",
+                        "prop", firstCatChunk ? "flagged|categories|templates" : "categories",
+                        "clcategories", string.Join("|", catChunk),
+                        "cllimit", "5000",
+                        "clcontinue", continueCl,
+                        "tltemplates", firstCatChunk ? string.Join("|", includeTemplates) : null,
+                        "tlcontinue", continueTl,
+                        "tllimit", "5000",
+                        "gcmlimit", "5000",
+                        "gcmprop", "ids",
+                        "gcmtype", "page",
+                        "gcmtitle", category,
+                        "gcmcontinue", continueGcm,
+                        "continue", continueQuery,
+                        "format", "xml");
+                    Console.Write('.');
+
+                    XmlDocument doc = new XmlDocument();
+                    doc.LoadXml(xml);
+
+                    foreach (XmlNode node in doc.SelectNodes("/api/query/pages/page"))
+                    {
+                        Article article = null;
+                        int pageId = int.Parse(node.Attributes["pageid"].Value);
+                        if (!articles.ContainsKey(pageId))
+                        {
+                            article = new Article
+                            {
+                                PageId = pageId,
+                                Categories = new List<string>(),
+                                Templates = new List<string>()
+                            };
+                            articles.Add(pageId, article);
+                        }
+                        else
+                            article = articles[pageId];
+                        if (firstCatChunk)
+                            article.Flagged = node.SelectNodes("flagged").Count != 0;
+                        foreach (XmlNode catNode in node.SelectNodes("categories/cl"))
+                            article.Categories.Add(catNode.Attributes["title"].Value);
+                        foreach (XmlNode tmpNode in node.SelectNodes("templates/tl"))
+                            article.Templates.Add(tmpNode.Attributes["title"].Value);
+                    }
+
+                    XmlNode contNode = doc.SelectSingleNode("/api/continue");
+                    if (contNode == null)
+                        break;
+                    var continueQueryAttr = contNode.Attributes["continue"];
+                    var continueGcmAttr = contNode.Attributes["gcmcontinue"];
+                    var continueClAttr = contNode.Attributes["clcontinue"];
+                    var continueTlAttr = contNode.Attributes["tlcontinue"];
+                    continueQuery = continueQueryAttr == null ? null : continueQueryAttr.Value;
+                    continueGcm = continueGcmAttr == null ? null : continueGcmAttr.Value;
+                    continueCl = continueClAttr == null ? null : continueClAttr.Value;
+                    continueTl = continueTlAttr == null ? null : continueTlAttr.Value;
+                }
+                firstCatChunk = false;
+            }
+
+            return articles.Values.ToArray();
+        }
+
         Program()
         {
             wpApi = new MwApi("ru.wikipedia.org");
 
-            string mainCategoryName = "Водные объекты по алфавиту";
-
             Console.Write("Obtaining category list...");
-            int totalCount = GetCategoryPageCount($"Категория:{mainCategoryName}");
-            var noRsTypeCats = GetSubCategories("Категория:Википедия:Статьи без источников по типам").
-                Select(s => s.Replace("Категория:", "")).ToArray();
+            var noRsTypeCats = GetSubCategories(
+                "Категория:Википедия:Статьи без источников по типам");
             Console.WriteLine(" Done");
 
-            var wocat = $"incategory:\"{mainCategoryName}\"";
+            string catSmall400 = "Категория:ПРО:ВО:Размер статьи: менее 400 символов";
+            string catSmall600 = "Категория:ПРО:ВО:Размер статьи: менее 600 символов";
+            string catNoCoords = "Категория:Карточка реки: заполнить: Координаты устья";
+            string catNoCoords10 = "Категория:Карточка реки: заполнить: Координаты устья реки свыше десяти км";
+            string catNoCoords50 = "Категория:Карточка реки: заполнить: Координаты устья реки свыше пятидесяти км";
+            string catNoCoords100 = "Категория:Карточка реки: заполнить: Координаты устья реки свыше ста км";
+            string catToImprove = "Категория:Википедия:Статьи для срочного улучшения";
+            string catNoRefs = "Категория:Википедия:Статьи без сносок";
+            string tmplNotChecked = "Шаблон:Непроверенная река";
+            var catSmallList = new string[] { catSmall400, catSmall600 };
+            var catNoCoordsList = new string[] { catNoCoords, catNoCoords10, catNoCoords50, catNoCoords100 };
+
             Console.Write("Scanning categories");
-            var idsNoPat = ScanCategoryG($"Категория:{mainCategoryName}").
-                Where(c => !c.Flagged).Select(c => c.PageId).ToArray();
-            Console.WriteLine();
-            var idsNoRs = new HashSet<int>();
-            foreach (var cat in noRsTypeCats)
-                idsNoRs.UnionWith(SearchArticles($"{wocat} incategory:\"{cat}\""));
-            Console.WriteLine();
-            var idsSmallSize = ScanCategory("Категория:ПРО:ВО:Размер статьи: менее 600 символов").ToList();
-            idsSmallSize.AddRange(ScanCategory("Категория:ПРО:ВО:Размер статьи: менее 400 символов"));
-            Console.WriteLine();
-            var idsNotChecked = SearchArticles($"{wocat} hastemplate:\"Непроверенная река\"");
-            Console.WriteLine();
-            var idsToImprove = SearchArticles($"{wocat} incategory:\"Википедия:Статьи для срочного улучшения\"");
-            Console.WriteLine();
-            var idsNoRefs = SearchArticles($"{wocat} incategory:\"Википедия:Статьи без сносок\"");
-            Console.WriteLine();
-            var idsNoCoords = SearchArticles($"{wocat} deepcat:\"Карточка реки: заполнить: Координаты устья\"");
+            var articles = ScanCategoryA(
+                "Категория:Водные объекты по алфавиту",
+                noRsTypeCats.Concat(catSmallList).Concat(catNoCoordsList).Concat(
+                new string[] { catToImprove, catNoRefs }).ToArray(),
+                new string[] { tmplNotChecked });
             Console.WriteLine(" Done");
 
-            var problemIds = new HashSet<int>(idsNoRs);
-            problemIds.UnionWith(idsNoPat);
-            problemIds.UnionWith(idsSmallSize);
-            problemIds.UnionWith(idsNotChecked);
-            problemIds.UnionWith(idsToImprove);
-            problemIds.UnionWith(idsNoRefs);
-            problemIds.UnionWith(idsNoCoords);
+            int totalCount = articles.Length;
+            var artsNoPat = articles.Where(a => !a.Flagged).ToArray();
+            var artsNoRs = articles.Where(a => a.Categories.Intersect(noRsTypeCats).Any()).ToArray();
+            var artsSmallSize = articles.Where(a => a.Categories.Intersect(catSmallList).Any()).ToArray();
+            var artsNotChecked = articles.Where(a => a.Templates.Contains(tmplNotChecked)).ToArray();
+            var artsToImprove = articles.Where(a => a.Categories.Contains(catToImprove)).ToArray();
+            var artsNoRefs = articles.Where(a => a.Categories.Contains(catNoRefs)).ToArray();
+            var artsNoCoords = articles.Where(a => a.Categories.Intersect(catNoCoordsList).Any()).ToArray();
 
-            double problemIdsPerc = problemIds.Count * 100.0 / totalCount;
-            double idsNoPatPerc = idsNoPat.Length * 100.0 / totalCount;
-            double idsNoRsPerc = idsNoRs.Count * 100.0 / totalCount;
-            double idsSmallSizePerc = idsSmallSize.Count * 100.0 / totalCount;
-            double idsNotCheckedPerc = idsNotChecked.Count * 100.0 / totalCount;
-            double idsToImprovePerc = idsToImprove.Count * 100.0 / totalCount;
-            double idsNoRefsPerc = idsNoRefs.Count * 100.0 / totalCount;
-            double idsNoCoordsPerc = idsNoCoords.Count * 100.0 / totalCount;
+            var problemArts = new HashSet<Article>();
+            problemArts.UnionWith(artsNoPat);
+            problemArts.UnionWith(artsNoRs);
+            problemArts.UnionWith(artsSmallSize);
+            problemArts.UnionWith(artsNotChecked);
+            problemArts.UnionWith(artsToImprove);
+            problemArts.UnionWith(artsNoRefs);
+            problemArts.UnionWith(artsNoCoords);
+
+            double problemIdsPerc = problemArts.Count * 100.0 / totalCount;
+            double artsNoPatPerc = artsNoPat.Length * 100.0 / totalCount;
+            double artsNoRsPerc = artsNoRs.Length * 100.0 / totalCount;
+            double artsSmallSizePerc = artsSmallSize.Length * 100.0 / totalCount;
+            double artsNotCheckedPerc = artsNotChecked.Length * 100.0 / totalCount;
+            double artsToImprovePerc = artsToImprove.Length * 100.0 / totalCount;
+            double artsNoRefsPerc = artsNoRefs.Length * 100.0 / totalCount;
+            double artsNoCoordsPerc = artsNoCoords.Length * 100.0 / totalCount;
 
             Thread.CurrentThread.CurrentCulture = CultureInfo.GetCultureInfo("ru-RU");
             var date = DateTime.Now.ToString("d MMMM yyyy");
 
             var tableLine = $"|-\n| {date} || " +
                 $"{totalCount} || " +
-                $"{idsNotChecked.Count} || {idsNotCheckedPerc:0.0} || " +
-                $"{idsToImprove.Count} || {idsToImprovePerc:0.0} || " +
-                $"{idsNoRs.Count} || {idsNoRsPerc:0.0} || " +
-                $"{idsNoRefs.Count} || {idsNoRefsPerc:0.0} || " +
-                $"{idsSmallSize.Count} || {idsSmallSizePerc:0.0} || " +
-                $"{idsNoCoords.Count} || {idsNoCoordsPerc:0.0} || " +
-                $"{idsNoPat.Length} || {idsNoPatPerc:0.0} || " +
-                $"{problemIds.Count} || {problemIdsPerc:0.0}\n";
+                $"{artsNotChecked.Length} || {artsNotCheckedPerc:0.0} || " +
+                $"{artsToImprove.Length} || {artsToImprovePerc:0.0} || " +
+                $"{artsNoRs.Length} || {artsNoRsPerc:0.0} || " +
+                $"{artsNoRefs.Length} || {artsNoRefsPerc:0.0} || " +
+                $"{artsSmallSize.Length} || {artsSmallSizePerc:0.0} || " +
+                $"{artsNoCoords.Length} || {artsNoCoordsPerc:0.0} || " +
+                $"{artsNoPat.Length} || {artsNoPatPerc:0.0} || " +
+                $"{problemArts.Count} || {problemIdsPerc:0.0}\n";
 
             ObtainEditToken();
 

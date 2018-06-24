@@ -75,7 +75,7 @@ namespace WikiTasks
                     if (key == null)
                         throw new Exception();
                     if (valueString == null && valueFileInfo == null)
-                        throw new Exception();
+                        continue;
                     if (valueString != null)
                         postData.Add(new StringContent(value as string), key);
                     if (valueFileInfo != null)
