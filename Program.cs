@@ -10,7 +10,8 @@ namespace WikiTasks
     class Article
     {
         public int PageId;
-        public bool Flagged;
+        public bool Unreviewed;
+        public bool OldReviewed;
         public List<string> Categories;
         public List<string> Templates;
     }
@@ -166,7 +167,13 @@ namespace WikiTasks
                         else
                             article = articles[pageId];
                         if (firstCatChunk)
-                            article.Flagged = node.SelectNodes("flagged").Count != 0;
+                        {
+                            var flNode = node.SelectSingleNode("flagged");
+                            if (flNode == null)
+                                article.Unreviewed = true;
+                            else if (flNode.Attributes["pending_since"] != null)
+                                article.OldReviewed = true;
+                        }
                         foreach (XmlNode catNode in node.SelectNodes("categories/cl"))
                             article.Categories.Add(catNode.Attributes["title"].Value);
                         foreach (XmlNode tmpNode in node.SelectNodes("templates/tl"))
@@ -221,45 +228,25 @@ namespace WikiTasks
             Console.WriteLine(" Done");
 
             int totalCount = articles.Length;
-            var artsNoPat = articles.Where(a => !a.Flagged).ToArray();
-            var artsNoRs = articles.Where(a => a.Categories.Intersect(noRsTypeCats).Any()).ToArray();
-            var artsSmallSize = articles.Where(a => a.Categories.Intersect(catSmallList).Any()).ToArray();
             var artsNotChecked = articles.Where(a => a.Templates.Contains(tmplNotChecked)).ToArray();
             var artsToImprove = articles.Where(a => a.Categories.Contains(catToImprove)).ToArray();
+            var artsNoRs = articles.Where(a => a.Categories.Intersect(noRsTypeCats).Any()).ToArray();
             var artsNoRefs = articles.Where(a => a.Categories.Contains(catNoRefs)).ToArray();
+            var artsSmallSize = articles.Where(a => a.Categories.Intersect(catSmallList).Any()).ToArray();
             var artsNoCoords = articles.Where(a => a.Categories.Intersect(catNoCoordsList).Any()).ToArray();
+            var artsNoPat = articles.Where(a => a.Unreviewed).ToArray();
+            var artsOldPat = articles.Where(a => a.OldReviewed).ToArray();
 
-            var problemArts = new HashSet<Article>();
-            problemArts.UnionWith(artsNoPat);
-            problemArts.UnionWith(artsNoRs);
-            problemArts.UnionWith(artsSmallSize);
-            problemArts.UnionWith(artsNotChecked);
-            problemArts.UnionWith(artsToImprove);
-            problemArts.UnionWith(artsNoRefs);
-            problemArts.UnionWith(artsNoCoords);
-
-            double problemIdsPerc = problemArts.Count * 100.0 / totalCount;
-            double artsNoPatPerc = artsNoPat.Length * 100.0 / totalCount;
-            double artsNoRsPerc = artsNoRs.Length * 100.0 / totalCount;
-            double artsSmallSizePerc = artsSmallSize.Length * 100.0 / totalCount;
-            double artsNotCheckedPerc = artsNotChecked.Length * 100.0 / totalCount;
-            double artsToImprovePerc = artsToImprove.Length * 100.0 / totalCount;
-            double artsNoRefsPerc = artsNoRefs.Length * 100.0 / totalCount;
-            double artsNoCoordsPerc = artsNoCoords.Length * 100.0 / totalCount;
+            var problems = new Article[][] { artsNotChecked, artsToImprove, artsNoRs,
+                artsNoRefs, artsSmallSize, artsNoCoords, artsNoPat, artsOldPat};
+            var problemArts = problems.SelectMany(a => a).Distinct().ToArray();
 
             Thread.CurrentThread.CurrentCulture = CultureInfo.GetCultureInfo("ru-RU");
-            var date = DateTime.Now.ToString("d MMMM yyyy");
+            var date = DateTime.UtcNow.ToString("yyyy.MM.dd HH:mm");
 
-            var tableLine = $"|-\n| {date} || " +
-                $"{totalCount} || " +
-                $"{artsNotChecked.Length} || {artsNotCheckedPerc:0.0} || " +
-                $"{artsToImprove.Length} || {artsToImprovePerc:0.0} || " +
-                $"{artsNoRs.Length} || {artsNoRsPerc:0.0} || " +
-                $"{artsNoRefs.Length} || {artsNoRefsPerc:0.0} || " +
-                $"{artsSmallSize.Length} || {artsSmallSizePerc:0.0} || " +
-                $"{artsNoCoords.Length} || {artsNoCoordsPerc:0.0} || " +
-                $"{artsNoPat.Length} || {artsNoPatPerc:0.0} || " +
-                $"{problemArts.Count} || {problemIdsPerc:0.0}\n";
+            var tableLine = $"|-\n| {date} || {totalCount} || " +
+                string.Join(" || ", problems.Concat(new Article[][] { problemArts }).
+                    Select(a => $"{a.Length} || {a.Length * 100.0 / totalCount:0.00}")) + "\n";
 
             ObtainEditToken();
 
