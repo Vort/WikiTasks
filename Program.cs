@@ -148,6 +148,9 @@ namespace WikiTasks
         {
             wpApi = new MwApi("ru.wikipedia.org");
 
+            string catNotChecked = "Категория:Википедия:Статьи о реках, требующие проверки";
+            string catToImprove = "Категория:Википедия:Статьи для срочного улучшения";
+            string catNoRefs = "Категория:Википедия:Статьи без сносок";
             string catSmall400 = "Категория:ПРО:ВО:Размер статьи: менее 400 символов";
             string catSmall600 = "Категория:ПРО:ВО:Размер статьи: менее 600 символов";
             string catNoMouthCoords = "Категория:Карточка реки: заполнить: Координаты устья";
@@ -156,25 +159,23 @@ namespace WikiTasks
             string catNoMouthCoords100 = "Категория:Карточка реки: заполнить: Координаты устья реки свыше ста км";
             string catNoGeoCoords1 = "Категория:Википедия:Водные объекты без указанных географических координат";
             string catNoGeoCoords2 = "Категория:Википедия:Каналы без указанных географических координат";
-            string catToImprove = "Категория:Википедия:Статьи для срочного улучшения";
-            string catNoRefs = "Категория:Википедия:Статьи без сносок";
-            string tmplNotChecked = "Шаблон:Непроверенная река";
             string tmplNoRs = "Шаблон:Сортировка: статьи без источников";
             var catSmallList = new string[] { catSmall400, catSmall600 };
             var catNoGeoCoordsList = new string[] { catNoGeoCoords1, catNoGeoCoords2 };
             var catNoMouthCoordsList = new string[] {
                 catNoMouthCoords, catNoMouthCoords10, catNoMouthCoords50, catNoMouthCoords100 };
 
-            Console.Write("Scanning categories");
+            Console.Write("Scanning category");
             var articles = ScanCategoryA(
                 "Категория:Водные объекты по алфавиту",
                 catSmallList.Concat(catNoMouthCoordsList).Concat(catNoGeoCoordsList).Concat(
-                new string[] { catToImprove, catNoRefs }).ToArray(),
-                new string[] { tmplNotChecked, tmplNoRs });
+                new string[] { catNotChecked, catToImprove, catNoRefs }).ToArray(),
+                new string[] { tmplNoRs });
             Console.WriteLine(" Done");
 
+            Console.Write("Processing...");
             int totalCount = articles.Length;
-            var artsNotChecked = articles.Where(a => a.Templates.Contains(tmplNotChecked)).ToArray();
+            var artsNotChecked = articles.Where(a => a.Categories.Contains(catNotChecked)).ToArray();
             var artsToImprove = articles.Where(a => a.Categories.Contains(catToImprove)).ToArray();
             var artsNoRs = articles.Where(a => a.Templates.Contains(tmplNoRs)).ToArray();
             var artsNoRefs = articles.Where(a => a.Categories.Contains(catNoRefs)).ToArray();
@@ -194,6 +195,7 @@ namespace WikiTasks
             var tableLine = $"\n|-\n| {date} || {totalCount} || " +
                 string.Join(" || ", problems.Concat(new Article[][] { problemArts }).
                     Select(a => $"{a.Length} || {a.Length * 100.0 / totalCount:0.00}"));
+            Console.WriteLine(" Done");
 
             ObtainEditToken();
 
