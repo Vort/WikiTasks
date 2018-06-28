@@ -153,48 +153,77 @@ namespace WikiTasks
             string catNoRefs = "Категория:Википедия:Статьи без сносок";
             string catSmall400 = "Категория:ПРО:ВО:Размер статьи: менее 400 символов";
             string catSmall600 = "Категория:ПРО:ВО:Размер статьи: менее 600 символов";
+            string catNoSourceCoords = "Категория:Карточка реки: заполнить: Координаты истока";
+            string catNoSourceCoords100 = "Категория:Карточка реки: заполнить: Координаты истока реки свыше ста км";
+            string catNoSourceCoords200 = "Категория:Карточка реки: заполнить: Координаты истока реки свыше двухсот км";
+            string catNoSourceCoords300 = "Категория:Карточка реки: заполнить: Координаты истока реки свыше трёхсот км";
+            string catRivers50 = "Категория:Реки до 50 км в длину";
+            string catRivers10 = "Категория:Реки до 10 км в длину";
+            string catRivers5 = "Категория:Реки до 5 км в длину";
             string catNoMouthCoords = "Категория:Карточка реки: заполнить: Координаты устья";
             string catNoMouthCoords10 = "Категория:Карточка реки: заполнить: Координаты устья реки свыше десяти км";
             string catNoMouthCoords50 = "Категория:Карточка реки: заполнить: Координаты устья реки свыше пятидесяти км";
             string catNoMouthCoords100 = "Категория:Карточка реки: заполнить: Координаты устья реки свыше ста км";
-            string catNoGeoCoords1 = "Категория:Википедия:Водные объекты без указанных географических координат";
-            string catNoGeoCoords2 = "Категория:Википедия:Каналы без указанных географических координат";
+            string catNoGeoCoords = "Категория:Википедия:Водные объекты без указанных географических координат";
             string tmplNoRs = "Шаблон:Сортировка: статьи без источников";
             var catSmallList = new string[] { catSmall400, catSmall600 };
-            var catNoGeoCoordsList = new string[] { catNoGeoCoords1, catNoGeoCoords2 };
+            var catNoSourceCoordsList = new string[] {
+                catNoSourceCoords, catNoSourceCoords100, catNoSourceCoords200, catNoSourceCoords300 };
+            var catRiversList = new string[] {
+                catRivers50, catRivers10, catRivers5 };
             var catNoMouthCoordsList = new string[] {
                 catNoMouthCoords, catNoMouthCoords10, catNoMouthCoords50, catNoMouthCoords100 };
 
             Console.Write("Scanning category");
             var articles = ScanCategoryA(
                 "Категория:Водные объекты по алфавиту",
-                catSmallList.Concat(catNoMouthCoordsList).Concat(catNoGeoCoordsList).Concat(
-                new string[] { catNotChecked, catToImprove, catNoRefs }).ToArray(),
-                new string[] { tmplNoRs });
+                catSmallList.Concat(catNoMouthCoordsList).Concat(catNoSourceCoordsList).
+                Concat(catRiversList).Concat(new string[] { catNotChecked, catToImprove,
+                    catNoRefs, catNoGeoCoords }).ToArray(), new string[] { tmplNoRs });
             Console.WriteLine(" Done");
 
             Console.Write("Processing...");
             int totalCount = articles.Length;
-            var artsNotChecked = articles.Where(a => a.Categories.Contains(catNotChecked)).ToArray();
-            var artsToImprove = articles.Where(a => a.Categories.Contains(catToImprove)).ToArray();
-            var artsNoRs = articles.Where(a => a.Templates.Contains(tmplNoRs)).ToArray();
-            var artsNoRefs = articles.Where(a => a.Categories.Contains(catNoRefs)).ToArray();
-            var artsSmallSize = articles.Where(a => a.Categories.Intersect(catSmallList).Any()).ToArray();
-            var artsNoMouthCoords = articles.Where(a => a.Categories.Intersect(catNoMouthCoordsList).Any()).ToArray();
-            var artsNoGeoCoords = articles.Where(a => a.Categories.Intersect(catNoGeoCoordsList).Any()).ToArray();
-            var artsOldPat = articles.Where(a => a.OldReviewed).ToArray();
-            var artsNoPat = articles.Where(a => a.Unreviewed).ToArray();
+            var artsNotChecked = articles.Where(
+                a => a.Categories.Contains(catNotChecked)).ToArray();
+            var artsToImprove = articles.Where(
+                a => a.Categories.Contains(catToImprove)).ToArray();
+            var artsNoRs = articles.Where(
+                a => a.Templates.Contains(tmplNoRs)).ToArray();
+            var artsNoRefs = articles.Where(
+                a => a.Categories.Contains(catNoRefs)).ToArray();
+            var artsSmallSize = articles.Where(
+                a => a.Categories.Intersect(catSmallList).Any()).ToArray();
+            var artsNoSourceCoords = articles.Where(
+                a => a.Categories.Intersect(catNoSourceCoordsList).Any() &&
+                !a.Categories.Intersect(catRiversList).Any()).ToArray();
+            var artsNoMouthCoords = articles.Where(
+                a => a.Categories.Intersect(catNoMouthCoordsList).Any()).ToArray();
+            var artsNoGeoCoords = articles.Where(
+                a => a.Categories.Contains(catNoGeoCoords)).ToArray();
+            var artsOldPat = articles.Where(
+                a => a.OldReviewed).ToArray();
+            var artsNoPat = articles.Where(
+                a => a.Unreviewed).ToArray();
 
-            var problems = new Article[][] { artsNotChecked, artsToImprove, artsNoRs, artsNoRefs,
-                artsSmallSize, artsNoMouthCoords, artsNoGeoCoords, artsOldPat, artsNoPat};
-            var problemArts = problems.SelectMany(a => a).Distinct().ToArray();
+            var problemGroups = new List<Article[][]> {
+                new[] { artsNotChecked },
+                new[] { artsToImprove },
+                new[] { artsNoRs },
+                new[] { artsNoRefs },
+                new[] { artsSmallSize },
+                new[] { artsNoSourceCoords, artsNoMouthCoords, artsNoGeoCoords },
+                new[] { artsOldPat, artsNoPat } };
+            problemGroups.Add(new[] { problemGroups.
+                SelectMany(a => a).SelectMany(a => a).Distinct().ToArray() });
 
             Thread.CurrentThread.CurrentCulture = CultureInfo.GetCultureInfo("ru-RU");
             var date = DateTime.UtcNow.ToString("yyyy.MM.dd HH:mm");
 
-            var tableLine = $"\n|-\n| {date} || {totalCount} || " +
-                string.Join(" || ", problems.Concat(new Article[][] { problemArts }).
-                    Select(a => $"{a.Length} || {a.Length * 100.0 / totalCount:0.00}"));
+            var tableLine = $"\n|-\n| {date} || {totalCount} || " + string.Join(" || ",
+                problemGroups.Select(g => string.Join(" || ", g.Select(l => l.Length)) +
+                $" || {g.SelectMany(a => a).Distinct().Count() * 100.0 / totalCount:0.00}"));
+
             Console.WriteLine(" Done");
 
             ObtainEditToken();
