@@ -153,33 +153,28 @@ namespace WikiTasks
             string catNoRefs = "Категория:Википедия:Статьи без сносок";
             string catSmall400 = "Категория:ПРО:ВО:Размер статьи: менее 400 символов";
             string catSmall600 = "Категория:ПРО:ВО:Размер статьи: менее 600 символов";
-            string catNoSourceCoords = "Категория:Карточка реки: заполнить: Координаты истока";
+            string catNoSourceCoords50 = "Категория:Карточка реки: заполнить: Координаты истока реки свыше пятидесяти км";
             string catNoSourceCoords100 = "Категория:Карточка реки: заполнить: Координаты истока реки свыше ста км";
             string catNoSourceCoords200 = "Категория:Карточка реки: заполнить: Координаты истока реки свыше двухсот км";
             string catNoSourceCoords300 = "Категория:Карточка реки: заполнить: Координаты истока реки свыше трёхсот км";
-            string catRivers50 = "Категория:Реки до 50 км в длину";
-            string catRivers10 = "Категория:Реки до 10 км в длину";
-            string catRivers5 = "Категория:Реки до 5 км в длину";
             string catNoMouthCoords = "Категория:Карточка реки: заполнить: Координаты устья";
             string catNoMouthCoords10 = "Категория:Карточка реки: заполнить: Координаты устья реки свыше десяти км";
             string catNoMouthCoords50 = "Категория:Карточка реки: заполнить: Координаты устья реки свыше пятидесяти км";
-            string catNoMouthCoords100 = "Категория:Карточка реки: заполнить: Координаты устья реки свыше ста км";
             string catNoGeoCoords = "Категория:Википедия:Водные объекты без указанных географических координат";
             string tmplNoRs = "Шаблон:Сортировка: статьи без источников";
             var catSmallList = new string[] { catSmall400, catSmall600 };
             var catNoSourceCoordsList = new string[] {
-                catNoSourceCoords, catNoSourceCoords100, catNoSourceCoords200, catNoSourceCoords300 };
-            var catRiversList = new string[] {
-                catRivers50, catRivers10, catRivers5 };
+                catNoSourceCoords50, catNoSourceCoords100, catNoSourceCoords200, catNoSourceCoords300 };
             var catNoMouthCoordsList = new string[] {
-                catNoMouthCoords, catNoMouthCoords10, catNoMouthCoords50, catNoMouthCoords100 };
+                catNoMouthCoords, catNoMouthCoords10, catNoMouthCoords50 };
 
             Console.Write("Scanning category");
             var articles = ScanCategoryA(
                 "Категория:Водные объекты по алфавиту",
                 catSmallList.Concat(catNoMouthCoordsList).Concat(catNoSourceCoordsList).
-                Concat(catRiversList).Concat(new string[] { catNotChecked, catToImprove,
-                    catNoRefs, catNoGeoCoords }).ToArray(), new string[] { tmplNoRs });
+                    Concat(new string[] { catNotChecked, catToImprove, catNoRefs,
+                    catNoGeoCoords }).ToArray(),
+                new string[] { tmplNoRs });
             Console.WriteLine(" Done");
 
             Console.Write("Processing...");
@@ -195,8 +190,7 @@ namespace WikiTasks
             var artsSmallSize = articles.Where(
                 a => a.Categories.Intersect(catSmallList).Any()).ToArray();
             var artsNoSourceCoords = articles.Where(
-                a => a.Categories.Intersect(catNoSourceCoordsList).Any() &&
-                !a.Categories.Intersect(catRiversList).Any()).ToArray();
+                a => a.Categories.Intersect(catNoSourceCoordsList).Any()).ToArray();
             var artsNoMouthCoords = articles.Where(
                 a => a.Categories.Intersect(catNoMouthCoordsList).Any()).ToArray();
             var artsNoGeoCoords = articles.Where(
@@ -213,7 +207,7 @@ namespace WikiTasks
                 new[] { artsNoRefs },
                 new[] { artsSmallSize },
                 new[] { artsNoSourceCoords, artsNoMouthCoords, artsNoGeoCoords },
-                new[] { artsOldPat, artsNoPat } };
+                new[] { artsNoPat, artsOldPat } };
             problemGroups.Add(new[] { problemGroups.
                 SelectMany(a => a).SelectMany(a => a).Distinct().ToArray() });
 
