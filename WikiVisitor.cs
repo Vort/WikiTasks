@@ -1,8 +1,5 @@
-﻿using Antlr4.Runtime;
-using Antlr4.Runtime.Tree;
-using System;
+﻿using Antlr4.Runtime.Tree;
 using System.Linq;
-using System.Text;
 using System.Text.RegularExpressions;
 
 namespace WikiTasks
@@ -11,14 +8,16 @@ namespace WikiTasks
     {
         Article article;
 
-        string paramName;
+        string[] templNames;
+        string[] paramNames;
         bool templateFound;
 
-        public WikiVisitor(Article article, string paramName)
+        public WikiVisitor(Article article, string[] templNames, string[] paramNames)
         {
             templateFound = false;
             this.article = article;
-            this.paramName = paramName;
+            this.templNames = templNames != null ? templNames : new string[] { };
+            this.paramNames = paramNames != null ? paramNames : new string[] { };
         }
 
         void Trim(string source, out int spaces1, out string trimmed, out bool newline, out int spaces2)
@@ -34,6 +33,9 @@ namespace WikiTasks
 
         public override object VisitTempl(WikiParser.TemplContext templContext)
         {
+            if (article.Status == ProcessStatus.Skipped)
+                return null;
+
             var template = new Template();
             template.Name = templContext.children[1].GetText().Trim();
             var prevParam = new TemplateParam();
@@ -56,6 +58,9 @@ namespace WikiTasks
                     param.Sp1 = v4;
                 if (prevParam.Value == "" && prevParam.Sp4 == 0)
                     prevParam.Sp4 = v3;
+                if (paramContext.ChildCount == 1 ||
+                    paramContext.ChildCount == 2 && paramContext.children[1].GetText().Trim().Length == 0)
+                    continue; // Ignore empty parameters
                 if (paramContext.ChildCount < 3)
                     return null; // Unnamed parameters are not supported
                 string name = paramContext.children[1].GetText();
@@ -63,8 +68,10 @@ namespace WikiTasks
                 var eqContext = paramContext.children[2] as ITerminalNode;
                 if (eqContext == null || eqContext.Symbol.Type != WikiLexer.EQ)
                     return null; // Unnamed parameters are not supported
-                param.ValueTrees = paramContext.children.Skip(3).ToArray();
-                string value = string.Concat(param.ValueTrees.Select(t => t.GetText()));
+                IParseTree[] valueTrees = paramContext.children.Skip(3).ToArray();
+                string value = string.Concat(valueTrees.Select(t => t.GetText()));
+                // Отключено для экономии памяти
+                // param.ValueTrees = valueTrees;
                 Trim(value, out param.Sp4, out param.Value, out v1, out v3);
                 template.Params.Add(param);
                 prevParam = param;
@@ -75,10 +82,38 @@ namespace WikiTasks
                     template.Params[template.Params.Count - 1].Value.TrimEnd();
             }
 
-            if (template[paramName] != null)
+
+            bool templMatch = false;
+            bool paramMatch = false;
+
+            var normName1 = template.Name.First().ToString().ToUpper() + template.Name.Substring(1);
+            foreach (var templName in templNames)
+            {
+                var normName2 = templName.First().ToString().ToUpper() + templName.Substring(1);
+                if (normName1 == normName2)
+                {
+                    templMatch = true;
+                    break;
+                }
+            }
+
+            foreach (var paramName in paramNames)
+            {
+                if (template[paramName] != null)
+                {
+                    paramMatch = true;
+                    break;
+                }
+            }
+
+
+            if (templMatch || paramMatch)
             {
                 if (templateFound)
-                    throw new Exception();
+                {
+                    article.Status = ProcessStatus.Skipped;
+                    return null;
+                }
                 templateFound = true;
 
                 article.ReplIndex1 = templContext.Start.StartIndex;

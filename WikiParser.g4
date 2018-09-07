@@ -25,12 +25,12 @@ wikiword : EQ
          | HEADING
          | WORD
          | LCB
-		 | RCB
+         | RCB
          | url
          | ilink
          | flink
          | elink
-		 | LSB
+         | LSB
          | COLON
          | templ
          | magic

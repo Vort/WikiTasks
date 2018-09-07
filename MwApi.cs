@@ -74,6 +74,8 @@ namespace WikiTasks
                     FileInfo valueFileInfo = value as FileInfo;
                     if (key == null)
                         throw new Exception();
+                    if (value == null)
+                        continue;
                     if (valueString == null && valueFileInfo == null)
                         throw new Exception();
                     if (valueString != null)
