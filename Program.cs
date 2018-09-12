@@ -437,7 +437,8 @@ namespace WikiTasks
                     Match pm = Regex.Match(cvt, "^\\{\\{[Cc]oord(\\|[^|}]+){2,}\\}\\}$");
                     if (!pm.Success)
                     {
-                        l1.Add($"# [[{article.Title}]], 2.1");
+                        if (!Regex.IsMatch(cvt, "[0-9.\\-]+/"))
+                            l1.Add($"# [[{article.Title}]], 2.1");
                         return false;
                     }
                     var coordParams = pm.Groups[1].Captures.Cast<Capture>().
@@ -492,7 +493,7 @@ namespace WikiTasks
                 }
             }
 
-            if (part1Coord != null && part2Coord != null && part1Coord != part2Coord)
+            if (part1Coord != null && part1Coord != "" && part2Coord != null && part1Coord != part2Coord)
             {
                 l1.Add($"# [[{article.Title}]], 3.1");
                 return false;
@@ -656,7 +657,7 @@ namespace WikiTasks
 
             var articles = articlesFlt.ToArray();
             //var articles = articlesFlt.Take(2000).ToArray();
-            //var articles = articlesFlt.Where(a => a.Title == "Петришуле").ToArray();
+            //var articles = articlesFlt.Where(a => a.Title == "Цистерцианский монастырь (Бохум)").ToArray();
 
             foreach (Article article in articles)
             {
