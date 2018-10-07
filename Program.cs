@@ -1,8 +1,7 @@
 ﻿using System;
 using System.Collections.Generic;
-using System.Globalization;
 using System.Linq;
-using System.Threading;
+using System.Text;
 using System.Xml;
 
 namespace WikiTasks
@@ -10,10 +9,26 @@ namespace WikiTasks
     class Article
     {
         public int PageId;
-        public bool Unreviewed;
-        public bool OldReviewed;
+        public string Title;
         public List<string> Categories;
-        public List<string> Templates;
+    }
+
+    static class ShuffleClass
+    {
+        private static Random rng = new Random();
+
+        public static void Shuffle<T>(this IList<T> list)
+        {
+            int n = list.Count;
+            while (n > 1)
+            {
+                n--;
+                int k = rng.Next(n + 1);
+                T value = list[k];
+                list[k] = list[n];
+                list[n] = value;
+            }
+        }
     }
 
     class Program
@@ -31,21 +46,6 @@ namespace WikiTasks
                 throw new Exception();
             }
             Console.WriteLine(" Done");
-        }
-
-        string DownloadArticle(string title)
-        {
-            string xml = wpApi.PostRequest(
-                "action", "query",
-                "prop", "revisions",
-                "rvprop", "content",
-                "format", "xml",
-                "titles", title);
-
-            XmlDocument doc = new XmlDocument();
-            doc.LoadXml(xml);
-
-            return doc.SelectSingleNode("/api/query/pages/page/revisions/rev").InnerText;
         }
 
         bool EditPage(string csrfToken, string title, string summary, string text)
@@ -67,28 +67,22 @@ namespace WikiTasks
             return doc.SelectSingleNode("/api/edit").Attributes["result"].InnerText == "Success";
         }
 
-        Article[] ScanCategoryA(string category,
-            string[] includeCategories,
-            string[] includeTemplates)
+        Article[] ScanCategoryA(string category, string[] includeCategories)
         {
             var articles = new Dictionary<int, Article>();
 
             string continueQuery = null;
             string continueGcm = null;
             string continueCl = null;
-            string continueTl = null;
             for (;;)
             {
                 string xml = wpApi.PostRequest(
                     "action", "query",
                     "generator", "categorymembers",
-                    "prop", "flagged|categories|templates",
+                    "prop", "categories",
                     "clcategories", string.Join("|", includeCategories),
                     "cllimit", "5000",
                     "clcontinue", continueCl,
-                    "tltemplates", string.Join("|", includeTemplates),
-                    "tlcontinue", continueTl,
-                    "tllimit", "5000",
                     "gcmlimit", "5000",
                     "gcmprop", "ids",
                     "gcmtype", "page",
@@ -105,27 +99,21 @@ namespace WikiTasks
                 {
                     Article article = null;
                     int pageId = int.Parse(node.Attributes["pageid"].Value);
+                    string title = node.Attributes["title"].Value;
                     if (!articles.ContainsKey(pageId))
                     {
                         article = new Article
                         {
                             PageId = pageId,
+                            Title = title,
                             Categories = new List<string>(),
-                            Templates = new List<string>()
                         };
-                        var flNode = node.SelectSingleNode("flagged");
-                        if (flNode == null)
-                            article.Unreviewed = true;
-                        else if (flNode.Attributes["pending_since"] != null)
-                            article.OldReviewed = true;
                         articles.Add(pageId, article);
                     }
                     else
                         article = articles[pageId];
                     foreach (XmlNode catNode in node.SelectNodes("categories/cl"))
                         article.Categories.Add(catNode.Attributes["title"].Value);
-                    foreach (XmlNode tmpNode in node.SelectNodes("templates/tl"))
-                        article.Templates.Add(tmpNode.Attributes["title"].Value);
                 }
 
                 XmlNode contNode = doc.SelectSingleNode("/api/continue");
@@ -134,11 +122,9 @@ namespace WikiTasks
                 var continueQueryAttr = contNode.Attributes["continue"];
                 var continueGcmAttr = contNode.Attributes["gcmcontinue"];
                 var continueClAttr = contNode.Attributes["clcontinue"];
-                var continueTlAttr = contNode.Attributes["tlcontinue"];
                 continueQuery = continueQueryAttr == null ? null : continueQueryAttr.Value;
                 continueGcm = continueGcmAttr == null ? null : continueGcmAttr.Value;
                 continueCl = continueClAttr == null ? null : continueClAttr.Value;
-                continueTl = continueTlAttr == null ? null : continueTlAttr.Value;
             }
 
             return articles.Values.ToArray();
@@ -148,91 +134,55 @@ namespace WikiTasks
         {
             wpApi = new MwApi("ru.wikipedia.org");
 
-            string catNotChecked = "Категория:Википедия:Статьи о реках, требующие проверки";
-            string catToImprove = "Категория:Википедия:Статьи для срочного улучшения";
-            string catNoRefs = "Категория:Википедия:Статьи без сносок";
-            string catSmall400 = "Категория:ПРО:ВО:Размер статьи: менее 400 символов";
-            string catSmall600 = "Категория:ПРО:ВО:Размер статьи: менее 600 символов";
-            string catNoSourceCoords50 = "Категория:Карточка реки: заполнить: Координаты истока реки свыше пятидесяти км";
-            string catNoSourceCoords100 = "Категория:Карточка реки: заполнить: Координаты истока реки свыше ста км";
-            string catNoSourceCoords200 = "Категория:Карточка реки: заполнить: Координаты истока реки свыше двухсот км";
-            string catNoSourceCoords300 = "Категория:Карточка реки: заполнить: Координаты истока реки свыше трёхсот км";
-            string catNoMouthCoords = "Категория:Карточка реки: заполнить: Координаты устья";
-            string catNoMouthCoords10 = "Категория:Карточка реки: заполнить: Координаты устья реки свыше десяти км";
-            string catNoMouthCoords50 = "Категория:Карточка реки: заполнить: Координаты устья реки свыше пятидесяти км";
-            string catNoGeoCoords = "Категория:Википедия:Водные объекты без указанных географических координат";
-            string tmplNoRs = "Шаблон:Сортировка: статьи без источников";
-            var catSmallList = new string[] { catSmall400, catSmall600 };
-            var catNoSourceCoordsList = new string[] {
-                catNoSourceCoords50, catNoSourceCoords100, catNoSourceCoords200, catNoSourceCoords300 };
-            var catNoMouthCoordsList = new string[] {
-                catNoMouthCoords, catNoMouthCoords10, catNoMouthCoords50 };
+            string[] catLenList = new string[]
+            {
+                "Категория:Реки до 1000 км в длину",
+                "Категория:Реки до 500 км в длину",
+                "Категория:Реки до 100 км в длину",
+                "Категория:Реки до 50 км в длину",
+                "Категория:Реки до 10 км в длину",
+                "Категория:Реки до 5 км в длину"
+            };
 
             Console.Write("Scanning category");
             var articles = ScanCategoryA(
-                "Категория:Водные объекты по алфавиту",
-                catSmallList.Concat(catNoMouthCoordsList).Concat(catNoSourceCoordsList).
-                    Concat(new string[] { catNotChecked, catToImprove, catNoRefs,
-                    catNoGeoCoords }).ToArray(),
-                new string[] { tmplNoRs });
+                "Категория:Википедия:Статьи о реках, требующие проверки", catLenList);
             Console.WriteLine(" Done");
 
             Console.Write("Processing...");
-            int totalCount = articles.Length;
-            var artsNotChecked = articles.Where(
-                a => a.Categories.Contains(catNotChecked)).ToArray();
-            var artsToImprove = articles.Where(
-                a => a.Categories.Contains(catToImprove)).ToArray();
-            var artsNoRs = articles.Where(
-                a => a.Templates.Contains(tmplNoRs)).ToArray();
-            var artsNoRefs = articles.Where(
-                a => a.Categories.Contains(catNoRefs)).ToArray();
-            var artsSmallSize = articles.Where(
-                a => a.Categories.Intersect(catSmallList).Any()).ToArray();
-            var artsNoSourceCoords = articles.Where(
-                a => a.Categories.Intersect(catNoSourceCoordsList).Any()).ToArray();
-            var artsNoMouthCoords = articles.Where(
-                a => a.Categories.Intersect(catNoMouthCoordsList).Any()).ToArray();
-            var artsNoGeoCoords = articles.Where(
-                a => a.Categories.Contains(catNoGeoCoords)).ToArray();
-            var artsOldPat = articles.Where(
-                a => a.OldReviewed).ToArray();
-            var artsNoPat = articles.Where(
-                a => a.Unreviewed).ToArray();
+            var reorderedArticles = new List<Article>();
+            for (int i = 0; i < catLenList.Length; i++)
+            {
+                var sameLenCatArticles = new List<Article>();
+                foreach (Article article in articles)
+                    if (article.Categories.Contains(catLenList[i]))
+                        sameLenCatArticles.Add(article);
+                sameLenCatArticles.Shuffle();
+                reorderedArticles.AddRange(sameLenCatArticles);
+            }
+            var noLenInfoArticles = articles.Except(reorderedArticles).ToArray();
+            noLenInfoArticles.Shuffle();
+            reorderedArticles.AddRange(noLenInfoArticles);
 
-            var problemGroups = new List<Article[][]> {
-                new[] { artsNotChecked },
-                new[] { artsToImprove },
-                new[] { artsNoRs },
-                new[] { artsNoRefs },
-                new[] { artsSmallSize },
-                new[] { artsNoSourceCoords, artsNoMouthCoords, artsNoGeoCoords },
-                new[] { artsNoPat, artsOldPat } };
-            problemGroups.Add(new[] { problemGroups.
-                SelectMany(a => a).SelectMany(a => a).Distinct().ToArray() });
+            var selectedArticles = reorderedArticles;
+            if (selectedArticles.Count > 6)
+                selectedArticles = selectedArticles.Take(6).ToList();
 
-            Thread.CurrentThread.CurrentCulture = CultureInfo.GetCultureInfo("ru-RU");
-            var date = DateTime.UtcNow.ToString("yyyy.MM.dd HH:mm");
-
-            var tableLine = $"\n|-\n| {date} || {totalCount} || " + string.Join(" || ",
-                problemGroups.Select(g => string.Join(" || ", g.Select(l => l.Length)) +
-                $" || {g.SelectMany(a => a).Distinct().Count() * 100.0 / totalCount:0.00}"));
+            var sb = new StringBuilder();
+            sb.AppendLine("{{колонки|3}}");
+            foreach (var article in selectedArticles)
+                sb.AppendLine($"# [[{article.Title}]]");
+            sb.AppendLine("{{колонки/конец}}");
+            sb.AppendLine("[[Категория:Проект:Водные объекты/Текущие события]]");
 
             Console.WriteLine(" Done");
 
             ObtainEditToken();
 
             Console.Write("Updating table...");
-            string pageName = "Проект:Водные объекты/Статистика/Проблемные статьи";
-            string wikiText = DownloadArticle(pageName);
-
-            string marker = "<!-- Маркер вставки. Не трогать. -->";
-            int insPoint = wikiText.IndexOf(marker) + marker.Length;
-
-            string replWikiText = wikiText.Substring(0, insPoint) +
-                tableLine + wikiText.Substring(insPoint);
+            string pageName = "Проект:Водные объекты/Выверка/Случайные статьи";
             bool isEditSuccessful = EditPage(csrfToken,
-                pageName, "обновление данных", replWikiText);
+                pageName, "обновление данных", sb.ToString());
 
             if (isEditSuccessful)
                 Console.WriteLine(" Done");
