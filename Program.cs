@@ -164,16 +164,23 @@ namespace WikiTasks
             noLenInfoArticles.Shuffle();
             reorderedArticles.AddRange(noLenInfoArticles);
 
+            int selectedCount = 5;
             var selectedArticles = reorderedArticles;
-            if (selectedArticles.Count > 6)
-                selectedArticles = selectedArticles.Take(6).ToList();
+            if (selectedArticles.Count > selectedCount)
+                selectedArticles = selectedArticles.Take(selectedCount).ToList();
 
             var sb = new StringBuilder();
             sb.AppendLine("{{колонки|3}}");
-            foreach (var article in selectedArticles)
-                sb.AppendLine($"# [[{article.Title}]]");
-            sb.AppendLine("{{колонки/конец}}");
-            sb.AppendLine("[[Категория:Проект:Водные объекты/Текущие события]]");
+            sb.AppendLine("* '''Реки для " +
+                "[[Шаблон:Непроверенная река/Краткая инструкция|выверки]]''':");
+            if (selectedArticles.Count != 0)
+            {
+                foreach (var article in selectedArticles.Take(selectedArticles.Count - 1))
+                    sb.AppendLine($"# [[{article.Title}]];");
+                sb.AppendLine($"# [[{selectedArticles.Last().Title}]].");
+            }
+            sb.AppendLine("{{колонки/конец}}<noinclude>" +
+                "[[Категория:Проект:Водные объекты/Текущие события]]</noinclude>");
 
             Console.WriteLine(" Done");
 
