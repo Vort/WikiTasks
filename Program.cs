@@ -25,9 +25,10 @@ namespace WikiTasks
         [Column()]
         public string WikiText;
 
-        public string MouthParam;
         public List<string> Errors;
-        public string P403Item;
+
+        public string MouthTitle;
+        public string MouthItem;
     };
 
     public class ImportEntry
@@ -46,22 +47,22 @@ namespace WikiTasks
     class Program
     {
         static Db db;
-        WpApi wpApi;
+        MwApi wpApi;
 
-        List<List<string>> SplitToChunks(string[] titles, int chunkSize)
+        List<List<T>> SplitToChunks<T>(T[] elements, int chunkSize)
         {
-            int chunkCount = (titles.Length + chunkSize - 1) / chunkSize;
+            int chunkCount = (elements.Length + chunkSize - 1) / chunkSize;
 
-            List<List<string>> chunks = new List<List<string>>();
+            var chunks = new List<List<T>>();
             for (int i = 0; i < chunkCount; i++)
             {
-                List<string> chunk = new List<string>();
+                var chunk = new List<T>();
                 for (int j = 0; j < chunkSize; j++)
                 {
                     int k = i * chunkSize + j;
-                    if (k >= titles.Length)
+                    if (k >= elements.Length)
                         break;
-                    chunk.Add(titles[k]);
+                    chunk.Add(elements[k]);
                 }
                 chunks.Add(chunk);
             }
@@ -127,13 +128,12 @@ namespace WikiTasks
             db.CreateTable<Article>();
 
             Console.Write("Requesting articles list...");
-
             db.BeginTransaction();
             foreach (var petScanEntry in PetScan.Query(
                 "language", "ru",
                 "categories", "Реки по алфавиту",
                 "negcats", "Википедия:Статьи о реках, требующие проверки",
-                "sparql", "SELECT ?r WHERE { ?r wdt:P31 wd:Q4022 . ?s schema:about ?r ; schema:inLanguage \"ru\" FILTER NOT EXISTS { ?r wdt:P403 ?d } }",
+                "sparql", Properties.Resources.GetNoMouthRivers,
                 "common_wiki", "cats",
                 "wikidata_item", "with"))
             {
@@ -186,10 +186,9 @@ namespace WikiTasks
                 parser.RemoveErrorListeners();
                 parser.AddErrorListener(ael);
                 WikiParser.InitContext initContext = parser.init();
-                WikiVisitor visitor = new WikiVisitor();
+                WikiVisitor visitor = new WikiVisitor(article);
                 visitor.VisitInit(initContext);
                 article.Errors = ael.ErrorList;
-                article.MouthParam = visitor.MouthParam;
 
                 Interlocked.Add(ref lexerErrors, ael.LexerErrors);
                 Interlocked.Add(ref parserErrors, ael.ParserErrors);
@@ -201,7 +200,7 @@ namespace WikiTasks
 
             Console.WriteLine(" Done");
             Console.WriteLine(" Articles: " + articles.Count());
-            Console.WriteLine(" Mouth count: " + articles.Count(a => a.MouthParam != null));
+            Console.WriteLine(" Mouth count: " + articles.Count(a => a.MouthTitle != null));
             Console.WriteLine(" Parser errors: " + parserErrors);
             Console.WriteLine(" Lexer errors: " + lexerErrors);
             Console.WriteLine(" Parsing time: " + stopwatch.Elapsed.TotalSeconds + " sec");
@@ -220,65 +219,83 @@ namespace WikiTasks
             File.WriteAllLines("error_log.txt", errorLog.ToArray(), Encoding.UTF8);
         }
 
-        void ConvertNamesToItems(List<Article> articles)
+        void FillMouthIds(List<Article> articles)
         {
-            if (File.Exists("import_entries.json"))
-                return;
+            var srcNames = articles.Where(a => a.MouthTitle != null &&
+                !a.MouthTitle.Contains('[') && !a.MouthTitle.Contains('{')).
+                Select(a => a.MouthTitle).OrderBy(m => m).Distinct().ToArray();
 
-            Console.Write("Converting names to items...");
+            var mouthNames = new Dictionary<string, HashSet<string>>();
 
-            var srcNames = articles.Where(a => a.MouthParam != null && !a.MouthParam.Contains('[')).
-                Select(a => a.MouthParam.Trim()).OrderBy(m => m).Distinct().ToArray();
-
-            var redirects = new Dictionary<string, string>();
-            var revRedirects = new Dictionary<string, string>();
             var chunks = SplitToChunks(srcNames, 50);
             foreach (var chunk in chunks)
             {
                 string xml = wpApi.PostRequest(
                     "action", "query",
-                    "prop", "revisions",
+                    "prop", "pageprops",
+                    "ppprop", "wikibase_item",
                     "redirects", "1",
                     "format", "xml",
                     "titles", string.Join("|", chunk));
+                Console.Write('.');
 
                 XmlDocument doc = new XmlDocument();
                 doc.LoadXml(xml);
 
+                foreach (XmlNode pageNode in doc.SelectNodes("/api/query/pages/page/pageprops"))
+                {
+                    string title = pageNode.ParentNode.Attributes["title"].Value;
+                    string id = pageNode.Attributes["wikibase_item"].Value;
+                    if (!mouthNames.ContainsKey(id))
+                        mouthNames[id] = new HashSet<string> { title };
+                }
+
                 foreach (XmlNode pageNode in doc.SelectNodes("/api/query/redirects/r"))
                 {
-                    string from = pageNode.Attributes["from"].InnerText;
-                    string to = pageNode.Attributes["to"].InnerText;
-                    redirects.Add(from, to);
-                    revRedirects.Add(to, from);
+                    string from = pageNode.Attributes["from"].Value;
+                    string to = pageNode.Attributes["to"].Value;
+                    mouthNames.First(kv => kv.Value.Contains(to)).Value.Add(from);
                 }
             }
 
-            var replNames = new List<string>();
-            foreach (var name in srcNames)
-                if (redirects.ContainsKey(name))
-                    replNames.Add(redirects[name]);
-                else
-                    replNames.Add(name);
+            foreach (var kv in mouthNames)
+                foreach (var article in articles.Where(a => kv.Value.Contains(a.MouthTitle)))
+                    article.MouthItem = kv.Key;
+        }
 
-            var qNames = PetScan.Query(
-                "sparql", "SELECT ?obj WHERE { VALUES ?okTypes { wd:Q4022 wd:Q23397 wd:Q39594 wd:Q165 wd:Q9430 wd:Q355304 wd:Q131681 wd:Q187971 wd:Q47521 wd:Q45776 wd:Q37901 wd:Q986177 wd:Q1973404 wd:Q47053 wd:Q204894 wd:Q12284 wd:Q1322134 wd:Q159675 wd:Q211302 wd:Q188025 wd:Q9019918 wd:Q6341928 wd:Q573344 wd:Q1172599 wd:Q283202 wd:Q31615 } ?obj wdt:P31 ?okTypes }",
-                "manual_list", string.Join("\r\n", replNames),
-                "manual_list_wiki", "ruwiki",
-                "common_wiki", "manual",
-                "wikidata_item", "with");
+        void ConvertNamesToItems(List<Article> articles)
+        {
+            if (File.Exists("import_entries.json"))
+                return;
+
+            Console.Write("Converting names to items");
+
+            var subclasses = SparqlApi.Query(
+                Properties.Resources.GetWoSubclasses).Select(e => e["type"]).ToArray();
+
+            FillMouthIds(articles);
+
+            string[] ids = articles.Where(
+                a => a.MouthItem != null).Select(a => a.MouthItem).Distinct().ToArray();
+            var objTypes = SparqlApi.Query(Properties.Resources.GetTypes.Replace(
+                "__ids__", string.Join(" ", ids.Select(x => $"wd:{x}"))));
+
+            var goodObjects = objTypes.Where(
+                e => subclasses.Contains(e["type"])).Select(e => e["item"]).Distinct().ToArray();
 
             var importEntries = new List<ImportEntry>();
-            foreach (var qName in qNames)
+            foreach (var goodObjId in goodObjects)
             {
-                string title1 = qName.Title.Replace('_', ' ');
-                string title2 = title1;
-                if (revRedirects.ContainsKey(title1))
-                    title2 = revRedirects[title1];
                 var foundArticles = articles.Where(
-                    a => a.MouthParam == title1 || a.MouthParam == title2).ToArray();
+                    a => a.MouthItem == goodObjId).ToArray();
                 foreach (var article in foundArticles)
-                    importEntries.Add(new ImportEntry { RootItem = article.WikidataItem, MouthItem = qName.WikidataItem });
+                {
+                    importEntries.Add(new ImportEntry
+                    {
+                        RootItem = article.WikidataItem,
+                        MouthItem = article.MouthItem
+                    });
+                }
             }
             importEntries = importEntries.OrderByDescending(
                 ie => int.Parse(ie.RootItem.Substring(1))).ToList();
@@ -362,7 +379,7 @@ namespace WikiTasks
 
         Program()
         {
-            wpApi = new WpApi();
+            wpApi = new MwApi("ru.wikipedia.org");
             FillArticlesDb();
 
             List<Article> articles;

@@ -1,0 +1,5 @@
+﻿SELECT ?item ?type WHERE
+{
+  VALUES ?item { __ids__ } .
+  ?item wdt:P31 ?type
+}

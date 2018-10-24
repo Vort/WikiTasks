@@ -1,0 +1,6 @@
+﻿SELECT ?river WHERE
+{
+  ?river wdt:P31 wd:Q4022 .
+  [] schema:about ?river ; schema:isPartOf <https://ru.wikipedia.org/> .
+  FILTER NOT EXISTS { ?river wdt:P403 [] }
+}

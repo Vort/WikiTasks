@@ -1,0 +1,4 @@
+﻿SELECT DISTINCT ?type WHERE
+{
+  ?type wdt:P279* wd:Q15324
+}
