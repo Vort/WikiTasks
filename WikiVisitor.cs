@@ -33,9 +33,6 @@ namespace WikiTasks
 
         public override object VisitTempl(WikiParser.TemplContext templContext)
         {
-            if (article.Status == ProcessStatus.Skipped)
-                return null;
-
             var template = new Template();
             template.Name = templContext.children[1].GetText().Trim();
             var prevParam = new TemplateParam();
@@ -110,14 +107,8 @@ namespace WikiTasks
             if (templMatch || paramMatch)
             {
                 if (templateFound)
-                {
-                    article.Status = ProcessStatus.Skipped;
                     return null;
-                }
                 templateFound = true;
-
-                article.ReplIndex1 = templContext.Start.StartIndex;
-                article.ReplIndex2 = templContext.Stop.StopIndex + 1;
                 article.Template = template;
             }
 
