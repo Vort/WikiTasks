@@ -1,5 +1,4 @@
 ﻿using Antlr4.Runtime;
-using Antlr4.Runtime.Tree;
 using LinqToDB;
 using LinqToDB.Mapping;
 using System;
@@ -8,7 +7,6 @@ using System.Diagnostics;
 using System.Globalization;
 using System.IO;
 using System.Linq;
-using System.Net;
 using System.Text;
 using System.Text.RegularExpressions;
 using System.Threading;
@@ -32,7 +30,9 @@ namespace WikiTasks
         public List<string> Errors;
         public Template Template;
 
-        public double? k;
+        public string TemplateNameNorm;
+        public string TemplateName;
+        public string TitleName;
     };
 
     class Db : LinqToDB.Data.DataConnection
@@ -241,67 +241,6 @@ namespace WikiTasks
             Console.WriteLine(" Done");
         }
 
-        List<int> SearchTransclusions(string pageName)
-        {
-            var idList = new List<int>();
-
-            Console.Write("Searching articles");
-            string continueQuery = null;
-            string continueTi = null;
-            for (;;)
-            {
-                string xml = wpApi.PostRequest(
-                    "action", "query",
-                    "prop", "transcludedin",
-                    "titles", pageName,
-                    "tinamespace", "0",
-                    "tiprop", "pageid",
-                    "tilimit", "500",
-                    "ticontinue", continueTi,
-                    "continue", continueQuery,
-                    "format", "xml");
-                Console.Write('.');
-
-                XmlDocument doc = new XmlDocument();
-                doc.LoadXml(xml);
-
-                foreach (XmlNode node in doc.SelectNodes("/api/query/pages/page/transcludedin/ti"))
-                {
-                    int id = int.Parse(node.Attributes["pageid"].InnerText);
-                    idList.Add(id);
-                }
-
-                XmlNode contNode = doc.SelectSingleNode("/api/continue");
-                if (contNode == null)
-                    break;
-                var continueQueryAttr = contNode.Attributes["continue"];
-                var continueTiAttr = contNode.Attributes["ticontinue"];
-                continueQuery = continueQueryAttr == null ? null : continueQueryAttr.Value;
-                continueTi = continueTiAttr == null ? null : continueTiAttr.Value;
-            }
-            Console.WriteLine(" Done");
-
-            return idList;
-        }
-
-        double? GetDouble(TemplateParam param)
-        {
-            if (param == null)
-                return null;
-
-            string tv = param.Value.Trim().Replace(',', '.').Replace(" ", "");
-            if (tv.Contains("<r"))
-                tv = tv.Substring(0, tv.IndexOf("<r"));
-            if (tv.Length == 0)
-                return null;
-
-            double d;
-            if (!double.TryParse(tv, out d))
-                return null;
-
-            return d;
-        }
-
         void ProcessArticles()
         {
             int processed = 0;
@@ -309,7 +248,8 @@ namespace WikiTasks
             int parserErrors = 0;
 
             var articles = db.Articles.ToArray();
-            //var articles = db.Articles.Take(100).ToArray();
+            //var articles = db.Articles.Take(5000).ToArray();
+            //var articles = db.Articles.Where(a => a.Title == "Мюра (водопады)").ToArray();
 
             Console.Write("Parsing articles");
             Stopwatch stopwatch = new Stopwatch();
@@ -327,7 +267,10 @@ namespace WikiTasks
                 parser.AddErrorListener(ael);
                 WikiParser.InitContext initContext = parser.init();
                 WikiVisitor visitor = new WikiVisitor(article,
-                    new string[] { "Водохранилище", "Озеро", "Пруд" }, null);
+                    new string[] { "Водохранилище", "Озеро", "Пруд", "Река", "Канал",
+                    "Море", "Залив", "Пролив", "Группа озёр", "Водопад", "Морское течение",
+                    "Ледник", "Болото", "Речной порог", "Водный источник", "Солончак",
+                    "Родник", "Заповедная зона" }, null);
                 visitor.VisitInit(initContext);
                 article.Errors = ael.ErrorList;
 
@@ -364,23 +307,47 @@ namespace WikiTasks
 
             Console.Write("Processing...");
 
+            string[] toReplace = { "водохранилище", "озеро", "пруд-накопитель", "пруд", "сардоба",
+                "горный парк", "река", "канал", "болото", "пролив", "водопады", "водопад", "ручей",
+                "ледник", "море", "минеральная вода", "залив", "бухта", "губа", "лагуна", "овраг" };
+
+
+            string[] blacklist = { "/", "{", ",", "(", "<" };
 
             foreach (Article article in articles)
             {
-                double? volume = GetDouble(article.Template["Объём"]);
-                double? area = GetDouble(article.Template["Площадь"]);
-                if (area == null)
+                article.TitleName = Regex.Replace(article.Title, "\\([^)]+\\)", "").Trim();
+                foreach (var replName in toReplace)
                 {
-                    double? length = GetDouble(article.Template["Длина"]);
-                    double? width = GetDouble(article.Template["Ширина"]);
-                    area = length * width;
+                    article.TitleName = article.TitleName.Replace(replName, "");
+                    article.TitleName = article.TitleName.Replace(
+                        replName.First().ToString().ToUpper() + replName.Substring(1), "");
                 }
-                double? depth = GetDouble(article.Template["Средняя глубина"]);
-                if (depth == null)
-                    depth = GetDouble(article.Template["Наибольшая глубина"]);
-                double? volumeCalc = area * depth / 1000.0;
-                article.k = volume > volumeCalc ? 
-                    volume / volumeCalc : volumeCalc / volume;
+                article.TitleName = article.TitleName.Trim();
+
+                if (article.Template == null)
+                    continue;
+
+                if (article.Template["Название"] != null)
+                {
+                    article.TemplateName = article.Template["Название"].Value;
+                    if (blacklist.Any(ble => article.TemplateName.Contains(ble)))
+                        article.TemplateName = null;
+                }
+
+                if (article.TemplateName != null)
+                {
+                    article.TemplateNameNorm = article.TemplateName;
+                    article.TemplateNameNorm = article.TemplateNameNorm.Replace("́", "");
+                    article.TemplateNameNorm = article.TemplateNameNorm.Replace("&nbsp;", " ");
+                    foreach (var replName in toReplace)
+                    {
+                        article.TemplateNameNorm = article.TemplateNameNorm.Replace(replName, "");
+                        article.TemplateNameNorm = article.TemplateNameNorm.Replace(
+                            replName.First().ToString().ToUpper() + replName.Substring(1), "");
+                    }
+                    article.TemplateNameNorm = article.TemplateNameNorm.Trim();
+                }
             }
 
             var sb = new StringBuilder();
@@ -388,15 +355,16 @@ namespace WikiTasks
             sb.AppendLine("{|class=\"wikitable\"");
             sb.AppendLine("!№");
             sb.AppendLine("!Статья");
-            sb.AppendLine("!k");
+            sb.AppendLine("!Название в карточке");
             int i = 1;
             foreach (Article article in articles.
-                Where(a => a.k != null && a.k >= 5.0).OrderByDescending(a => a.k))
+                Where(a => a.TemplateNameNorm != null &&
+                a.TemplateNameNorm != a.TitleName).OrderBy(a => a.Title))
             {
                 sb.AppendLine("|-");
                 sb.AppendLine($"| {i}");
                 sb.AppendLine($"| [[{article.Title}]]");
-                sb.AppendLine($"| {article.k:0.000}");
+                sb.AppendLine($"| {ColorizeLat(article.TemplateName)}");
                 i++;
             }
             sb.AppendLine("|}");
@@ -407,12 +375,78 @@ namespace WikiTasks
             Console.WriteLine(" Done");
         }
 
+        string ColorizeLat(string text)
+        {
+            bool latStart = false;
+            var result = new StringBuilder();
+            var chunk = new StringBuilder();
+            for (int i = 0; i < text.Length + 1; i++)
+            {
+                char? c = i == text.Length ? (char?)null : text[i];
+                if ((c >= 'a' && c <= 'z') ||
+                    (c >= 'A' && c <= 'Z') ||
+                    (c == null && !latStart))
+                {
+                    if (!latStart)
+                    {
+                        latStart = true;
+                        result.Append(chunk);
+                        chunk.Clear();
+                    }
+                }
+                else if (latStart)
+                {
+                    result.Append($"{{{{color|crimson|{chunk}}}}}");
+                    chunk.Clear();
+                    latStart = false;
+                }
+                chunk.Append(c);
+            }
+            return result.ToString();
+        }
+
+        List<int> ScanCategory(string category)
+        {
+            Console.Write("Scanning category");
+            var idList = new List<int>();
+
+            string continueParam = "";
+            for (;;)
+            {
+                string xml = wpApi.PostRequest(
+                    "action", "query",
+                    "generator", "categorymembers",
+                    "gcmprop", "ids",
+                    "gcmtype", "page",
+                    "gcmtitle", category,
+                    "gcmlimit", "500",
+                    "gcmcontinue", continueParam,
+                    "format", "xml");
+                Console.Write('.');
+
+                XmlDocument doc = new XmlDocument();
+                doc.LoadXml(xml);
+
+                foreach (XmlNode node in doc.SelectNodes("/api/query/pages/page"))
+                {
+                    int id = int.Parse(node.Attributes["pageid"].InnerText);
+                    idList.Add(id);
+                }
+
+                XmlNode contNode = doc.SelectSingleNode("/api/continue");
+                if (contNode == null)
+                    break;
+                continueParam = contNode.Attributes["gcmcontinue"].InnerText;
+            }
+            Console.WriteLine(" Done");
+            return idList;
+        }
+
         Program()
         {
             wpApi = new MwApi("ru.wikipedia.org");
-            var idsR = SearchTransclusions("Шаблон:Водохранилище");
-            var idsL = SearchTransclusions("Шаблон:Озеро");
-            DownloadArticles(idsR.Concat(idsL).ToArray());
+            var ids = ScanCategory("Категория:Водные объекты по алфавиту");
+            DownloadArticles(ids.ToArray());
             ProcessArticles();
         }
 
