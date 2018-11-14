@@ -21,7 +21,7 @@ namespace WikiTasks
         [PrimaryKey]
         public int PageId;
         [Column()]
-        public string Timestamp;
+        public int RevisionId;
         [Column()]
         public string Title;
         [Column()]
@@ -199,13 +199,12 @@ namespace WikiTasks
                     continue;
 
                 Article article = new Article();
-                article.Title = pageNode.Attributes["title"].InnerText;
-                article.PageId = int.Parse(pageNode.Attributes["pageid"].InnerText);
+                article.Title = pageNode.Attributes["title"].Value;
+                article.PageId = int.Parse(pageNode.Attributes["pageid"].Value);
 
                 XmlNode revNode = pageNode.SelectSingleNode("revisions/rev");
                 article.SrcWikiText = revNode.InnerText;
-                if (revNode.Attributes["timestamp"] != null)
-                    article.Timestamp = revNode.Attributes["timestamp"].InnerText;
+                article.RevisionId = int.Parse(revNode.Attributes["revid"].Value);
 
                 articles.Add(article);
             }
@@ -213,21 +212,38 @@ namespace WikiTasks
             return articles;
         }
 
-        void DownloadArticles(int[] ids)
+        void DownloadArticles(Dictionary<int, int> ids)
         {
-            if (HaveTable("Articles"))
-                db.DropTable<Article>();
-            db.CreateTable<Article>();
+            if (!HaveTable("Articles"))
+                db.CreateTable<Article>();
+
+            var dbids = db.Articles.ToDictionary(a => a.PageId, a => a.RevisionId);
+
+
+            var idsset = new HashSet<int>(ids.Keys);
+            var dbidsset = new HashSet<int>(dbids.Keys);
+
+            var deleted = dbidsset.Except(idsset).ToArray();
+            var added = idsset.Except(dbidsset).ToArray();
+            var existing = idsset.Intersect(dbidsset).ToArray();
+            var changed = existing.Where(id => ids[id] != dbids[id]).ToArray();
+
+            var todl = added.ToDictionary(id => id, id => true).Union(
+                changed.ToDictionary(id => id, id => false)).ToDictionary(
+                kv => kv.Key, kv => kv.Value);
+
+            db.Articles.Delete(a => deleted.Contains(a.PageId));
 
             Console.Write("Downloading articles");
-            var chunks = SplitToChunks(ids, 50);
+            var chunks = SplitToChunks(todl.Keys.OrderBy(x => x).ToArray(), 100);
             foreach (var chunk in chunks)
             {
                 string idsChunk = string.Join("|", chunk);
                 string xml = wpApi.PostRequest(
                     "action", "query",
                     "prop", "revisions",
-                    "rvprop", "timestamp|content",
+                    "rvprop", "ids|content",
+                    "rvslots", "main",
                     "format", "xml",
                     "pageids", idsChunk);
                 Console.Write('.');
@@ -235,7 +251,10 @@ namespace WikiTasks
                 List<Article> articles = DeserializeArticles(xml);
                 db.BeginTransaction();
                 foreach (Article a in articles)
-                    db.Insert(a);
+                    if (todl[a.PageId])
+                        db.Insert(a);
+                    else
+                        db.Update(a);
                 db.CommitTransaction();
             }
             Console.WriteLine(" Done");
@@ -277,7 +296,7 @@ namespace WikiTasks
                 Interlocked.Add(ref lexerErrors, ael.LexerErrors);
                 Interlocked.Add(ref parserErrors, ael.ParserErrors);
 
-                if (Interlocked.Increment(ref processed) % 50 == 0)
+                if (Interlocked.Increment(ref processed) % 100 == 0)
                     Console.Write('.');
             });
             stopwatch.Stop();
@@ -352,7 +371,7 @@ namespace WikiTasks
 
             var sb = new StringBuilder();
 
-            sb.AppendLine("{|class=\"wikitable\"");
+            sb.AppendLine("{|class=\"wikitable sortable\"");
             sb.AppendLine("!№");
             sb.AppendLine("!Статья");
             sb.AppendLine("!Название в карточке");
@@ -361,10 +380,12 @@ namespace WikiTasks
                 Where(a => a.TemplateNameNorm != null &&
                 a.TemplateNameNorm != a.TitleName).OrderBy(a => a.Title))
             {
+                var colorizedTemplateName = Regex.Replace(
+                    article.TemplateName, "([a-zA-Z]+)", "{{color|crimson|$1}}");
                 sb.AppendLine("|-");
                 sb.AppendLine($"| {i}");
                 sb.AppendLine($"| [[{article.Title}]]");
-                sb.AppendLine($"| {ColorizeLat(article.TemplateName)}");
+                sb.AppendLine($"| {colorizedTemplateName}");
                 i++;
             }
             sb.AppendLine("|}");
@@ -375,52 +396,28 @@ namespace WikiTasks
             Console.WriteLine(" Done");
         }
 
-        string ColorizeLat(string text)
-        {
-            bool latStart = false;
-            var result = new StringBuilder();
-            var chunk = new StringBuilder();
-            for (int i = 0; i < text.Length + 1; i++)
-            {
-                char? c = i == text.Length ? (char?)null : text[i];
-                if ((c >= 'a' && c <= 'z') ||
-                    (c >= 'A' && c <= 'Z') ||
-                    (c == null && !latStart))
-                {
-                    if (!latStart)
-                    {
-                        latStart = true;
-                        result.Append(chunk);
-                        chunk.Clear();
-                    }
-                }
-                else if (latStart)
-                {
-                    result.Append($"{{{{color|crimson|{chunk}}}}}");
-                    chunk.Clear();
-                    latStart = false;
-                }
-                chunk.Append(c);
-            }
-            return result.ToString();
-        }
-
-        List<int> ScanCategory(string category)
+        Dictionary<int, int> ScanCategory(string category)
         {
             Console.Write("Scanning category");
-            var idList = new List<int>();
+            var ids = new Dictionary<int, int>();
 
-            string continueParam = "";
+            string continueQuery = null;
+            string continueGcm = null;
+            string continueRv = null;
             for (;;)
             {
                 string xml = wpApi.PostRequest(
                     "action", "query",
                     "generator", "categorymembers",
+                    "prop", "revisions",
+                    "rvprop", "ids",
                     "gcmprop", "ids",
                     "gcmtype", "page",
                     "gcmtitle", category,
-                    "gcmlimit", "500",
-                    "gcmcontinue", continueParam,
+                    "gcmlimit", "max",
+                    "gcmcontinue", continueGcm,
+                    "rvcontinue", continueRv,
+                    "continue", continueQuery,
                     "format", "xml");
                 Console.Write('.');
 
@@ -429,24 +426,31 @@ namespace WikiTasks
 
                 foreach (XmlNode node in doc.SelectNodes("/api/query/pages/page"))
                 {
-                    int id = int.Parse(node.Attributes["pageid"].InnerText);
-                    idList.Add(id);
+                    int pageId = int.Parse(node.Attributes["pageid"].Value);
+                    int revisionId = int.Parse(node.
+                        SelectSingleNode("revisions/rev").Attributes["revid"].Value);
+                    ids.Add(pageId, revisionId);
                 }
 
                 XmlNode contNode = doc.SelectSingleNode("/api/continue");
                 if (contNode == null)
                     break;
-                continueParam = contNode.Attributes["gcmcontinue"].InnerText;
+                var continueQueryAttr = contNode.Attributes["continue"];
+                var continueGcmAttr = contNode.Attributes["gcmcontinue"];
+                var continueRvAttr = contNode.Attributes["rvcontinue"];
+                continueQuery = continueQueryAttr == null ? null : continueQueryAttr.Value;
+                continueGcm = continueGcmAttr == null ? null : continueGcmAttr.Value;
+                continueRv = continueRvAttr == null ? null : continueRvAttr.Value;
             }
             Console.WriteLine(" Done");
-            return idList;
+            return ids;
         }
 
         Program()
         {
             wpApi = new MwApi("ru.wikipedia.org");
             var ids = ScanCategory("Категория:Водные объекты по алфавиту");
-            DownloadArticles(ids.ToArray());
+            DownloadArticles(ids);
             ProcessArticles();
         }
 
