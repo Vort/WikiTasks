@@ -15,24 +15,35 @@ using System.Xml;
 
 namespace WikiTasks
 {
+    public enum ProcessStatus
+    {
+        NotProcessed = 0,
+        Success = 1,
+        Failure = 2,
+        Skipped = 3
+    }
+
     [Table(Name = "Articles")]
     class Article
     {
         [PrimaryKey]
         public int PageId;
         [Column()]
-        public int RevisionId;
+        public string Timestamp;
         [Column()]
         public string Title;
         [Column()]
         public string SrcWikiText;
+        [Column()]
+        public string SrcRepl;
+        [Column()]
+        public string DstRepl;
+        [Column()]
+        public ProcessStatus Status;
+
 
         public List<string> Errors;
         public Template Template;
-
-        public string TemplateNameNorm;
-        public string TemplateName;
-        public string TitleName;
     };
 
     class Db : LinqToDB.Data.DataConnection
@@ -159,6 +170,8 @@ namespace WikiTasks
         MwApi wpApi;
         static Db db;
 
+        string csrfToken;
+
         List<List<T>> SplitToChunks<T>(T[] elements, int chunkSize)
         {
             int chunkCount = (elements.Length + chunkSize - 1) / chunkSize;
@@ -178,6 +191,18 @@ namespace WikiTasks
             }
 
             return chunks;
+        }
+
+        void ObtainEditToken()
+        {
+            Console.Write("Authenticating...");
+            csrfToken = wpApi.GetToken("csrf");
+            if (csrfToken == null)
+            {
+                Console.WriteLine(" Failed");
+                throw new Exception();
+            }
+            Console.WriteLine(" Done");
         }
 
         static bool HaveTable(string name)
@@ -204,7 +229,8 @@ namespace WikiTasks
 
                 XmlNode revNode = pageNode.SelectSingleNode("revisions/rev");
                 article.SrcWikiText = revNode.InnerText;
-                article.RevisionId = int.Parse(revNode.Attributes["revid"].Value);
+                if (revNode.Attributes["timestamp"] != null)
+                    article.Timestamp = revNode.Attributes["timestamp"].Value;
 
                 articles.Add(article);
             }
@@ -212,38 +238,21 @@ namespace WikiTasks
             return articles;
         }
 
-        void DownloadArticles(Dictionary<int, int> ids)
+        void DownloadArticles(int[] ids)
         {
-            if (!HaveTable("Articles"))
-                db.CreateTable<Article>();
-
-            var dbids = db.Articles.ToDictionary(a => a.PageId, a => a.RevisionId);
-
-
-            var idsset = new HashSet<int>(ids.Keys);
-            var dbidsset = new HashSet<int>(dbids.Keys);
-
-            var deleted = dbidsset.Except(idsset).ToArray();
-            var added = idsset.Except(dbidsset).ToArray();
-            var existing = idsset.Intersect(dbidsset).ToArray();
-            var changed = existing.Where(id => ids[id] != dbids[id]).ToArray();
-
-            var todl = added.ToDictionary(id => id, id => true).Union(
-                changed.ToDictionary(id => id, id => false)).ToDictionary(
-                kv => kv.Key, kv => kv.Value);
-
-            db.Articles.Delete(a => deleted.Contains(a.PageId));
+            if (HaveTable("Articles"))
+                db.DropTable<Article>();
+            db.CreateTable<Article>();
 
             Console.Write("Downloading articles");
-            var chunks = SplitToChunks(todl.Keys.OrderBy(x => x).ToArray(), 100);
+            var chunks = SplitToChunks(ids, 100);
             foreach (var chunk in chunks)
             {
                 string idsChunk = string.Join("|", chunk);
                 string xml = wpApi.PostRequest(
                     "action", "query",
                     "prop", "revisions",
-                    "rvprop", "ids|content",
-                    "rvslots", "main",
+                    "rvprop", "timestamp|content",
                     "format", "xml",
                     "pageids", idsChunk);
                 Console.Write('.');
@@ -251,10 +260,7 @@ namespace WikiTasks
                 List<Article> articles = DeserializeArticles(xml);
                 db.BeginTransaction();
                 foreach (Article a in articles)
-                    if (todl[a.PageId])
-                        db.Insert(a);
-                    else
-                        db.Update(a);
+                    db.Insert(a);
                 db.CommitTransaction();
             }
             Console.WriteLine(" Done");
@@ -267,7 +273,7 @@ namespace WikiTasks
             int parserErrors = 0;
 
             var articles = db.Articles.ToArray();
-            //var articles = db.Articles.Take(5000).ToArray();
+            //var articles = db.Articles.Take(500).ToArray();
             //var articles = db.Articles.Where(a => a.Title == "Мюра (водопады)").ToArray();
 
             Console.Write("Parsing articles");
@@ -286,10 +292,7 @@ namespace WikiTasks
                 parser.AddErrorListener(ael);
                 WikiParser.InitContext initContext = parser.init();
                 WikiVisitor visitor = new WikiVisitor(article,
-                    new string[] { "Водохранилище", "Озеро", "Пруд", "Река", "Канал",
-                    "Море", "Залив", "Пролив", "Группа озёр", "Водопад", "Морское течение",
-                    "Ледник", "Болото", "Речной порог", "Водный источник", "Солончак",
-                    "Родник", "Заповедная зона" }, null);
+                    new string[] { "Навигационная полоса" }, null);
                 visitor.VisitInit(initContext);
                 article.Errors = ael.ErrorList;
 
@@ -321,137 +324,159 @@ namespace WikiTasks
 
             Thread.CurrentThread.CurrentCulture = CultureInfo.InvariantCulture;
 
-            var l1 = new List<string>();
-            var l2 = new List<string>();
-
             Console.Write("Processing...");
 
-            string[] toReplace = { "водохранилище", "озеро", "пруд-накопитель", "пруд", "сардоба",
-                "горный парк", "река", "канал", "болото", "пролив", "водопады", "водопад", "ручей",
-                "ледник", "море", "минеральная вода", "залив", "бухта", "губа", "лагуна", "овраг" };
-
-
-            string[] blacklist = { "/", "{", ",", "(", "<" };
-
-            foreach (Article article in articles)
-            {
-                article.TitleName = Regex.Replace(article.Title, "\\([^)]+\\)", "").Trim();
-                foreach (var replName in toReplace)
-                {
-                    article.TitleName = article.TitleName.Replace(replName, "");
-                    article.TitleName = article.TitleName.Replace(
-                        replName.First().ToString().ToUpper() + replName.Substring(1), "");
-                }
-                article.TitleName = article.TitleName.Trim();
-
-                if (article.Template == null)
-                    continue;
-
-                if (article.Template["Название"] != null)
-                {
-                    article.TemplateName = article.Template["Название"].Value;
-                    if (blacklist.Any(ble => article.TemplateName.Contains(ble)))
-                        article.TemplateName = null;
-                }
-
-                if (article.TemplateName != null)
-                {
-                    article.TemplateNameNorm = article.TemplateName;
-                    article.TemplateNameNorm = article.TemplateNameNorm.Replace("́", "");
-                    article.TemplateNameNorm = article.TemplateNameNorm.Replace("&nbsp;", " ");
-                    foreach (var replName in toReplace)
-                    {
-                        article.TemplateNameNorm = article.TemplateNameNorm.Replace(replName, "");
-                        article.TemplateNameNorm = article.TemplateNameNorm.Replace(
-                            replName.First().ToString().ToUpper() + replName.Substring(1), "");
-                    }
-                    article.TemplateNameNorm = article.TemplateNameNorm.Trim();
-                }
-            }
+            var cnt = new List<string>();
 
             var sb = new StringBuilder();
 
             sb.AppendLine("{|class=\"wikitable sortable\"");
             sb.AppendLine("!№");
             sb.AppendLine("!Статья");
-            sb.AppendLine("!Название в карточке");
+            sb.AppendLine("!nobr");
+            sb.AppendLine("!hlist");
             int i = 1;
-            foreach (Article article in articles.
-                Where(a => a.TemplateNameNorm != null &&
-                a.TemplateNameNorm != a.TitleName).OrderBy(a => a.Title))
+
+            foreach (Article article in articles.Where(a => a.Template != null))
             {
-                var colorizedTemplateName = Regex.Replace(
-                    article.TemplateName, "([a-zA-Z]+)", "{{color|crimson|$1}}");
+                article.SrcRepl = null;
+                article.DstRepl = null;
+
+                if (article.Template.ToString().Contains('*'))
+                    continue;
+                var p1 = article.Template["содержание"];
+                var p2 = article.Template["список"];
+                if (p1 == null && p2 == null)
+                    continue;
+                string content = p1 != null ? p1.Value : p2.Value;
+
+                var match = Regex.Match(content,
+                    "\\A[ \\n]*(\\<div( align=\\\"center\\\")?\\>)?[ \\n]*(\\{\\{(nobr|s|nowrap)\\|([^•}]+)• *\\}\\}[ \\n]*)+(\\{\\{(nobr|s|nowrap)\\|([^•}]+)\\}\\}[ \\n]*)?(\\<\\/div\\>)?[ \\n]*\\z",
+                    RegexOptions.Singleline);
+
+                if (!match.Success)
+                {
+                    cnt.Add(content);
+                    continue;
+                }
+
+                var values = 
+                    match.Groups[5].Captures.Cast<Capture>().Select(c => c.Value.Trim()).Concat(
+                    match.Groups[8].Captures.Cast<Capture>().Select(c => c.Value.Trim()));
+
+                var hlistValues = string.Concat(values.Select(v => $"\n* {v}"));
+
+                article.SrcRepl = content;
+                article.DstRepl = hlistValues;
+
                 sb.AppendLine("|-");
                 sb.AppendLine($"| {i}");
                 sb.AppendLine($"| [[{article.Title}]]");
-                sb.AppendLine($"| {colorizedTemplateName}");
+                sb.AppendLine($"| <small><code><nowiki>{content}</nowiki></code></small>");
+                sb.AppendLine($"| <small><code><nowiki>{hlistValues}</nowiki></code></small>");
                 i++;
             }
             sb.AppendLine("|}");
-            sb.AppendLine();
-            sb.AppendLine("[[Категория:Проект:Водные объекты/Текущие события]]");
 
-            File.WriteAllText("result.txt", sb.ToString());
+            db.BeginTransaction();
+            foreach (var article in articles)
+                db.Update(article);
+            db.CommitTransaction();
+
+            File.WriteAllLines("cnt.txt", cnt.Select(c => c + "\n\n"));
+            File.WriteAllText("repl.txt", sb.ToString());
             Console.WriteLine(" Done");
         }
 
-        Dictionary<int, int> ScanCategory(string category)
+        List<int> SearchArticles(string query, string ns = "0")
         {
-            Console.Write("Scanning category");
-            var ids = new Dictionary<int, int>();
+            var idList = new List<int>();
 
-            string continueQuery = null;
-            string continueGcm = null;
-            string continueRv = null;
+            Console.Write("Searching articles");
+            string sroffset = "";
             for (;;)
             {
                 string xml = wpApi.PostRequest(
                     "action", "query",
-                    "generator", "categorymembers",
-                    "prop", "revisions",
-                    "rvprop", "ids",
-                    "gcmprop", "ids",
-                    "gcmtype", "page",
-                    "gcmtitle", category,
-                    "gcmlimit", "max",
-                    "gcmcontinue", continueGcm,
-                    "rvcontinue", continueRv,
-                    "continue", continueQuery,
+                    "list", "search",
+                    "srwhat", "text",
+                    "srsearch", query,
+                    "srprop", "",
+                    "srinfo", "",
+                    "srlimit", "100",
+                    "sroffset", sroffset,
+                    "srnamespace", ns,
                     "format", "xml");
                 Console.Write('.');
 
                 XmlDocument doc = new XmlDocument();
                 doc.LoadXml(xml);
 
-                foreach (XmlNode node in doc.SelectNodes("/api/query/pages/page"))
+                foreach (XmlNode pNode in doc.SelectNodes("/api/query/search/p"))
                 {
-                    int pageId = int.Parse(node.Attributes["pageid"].Value);
-                    int revisionId = int.Parse(node.
-                        SelectSingleNode("revisions/rev").Attributes["revid"].Value);
-                    ids.Add(pageId, revisionId);
+                    int id = int.Parse(pNode.Attributes["pageid"].InnerText);
+                    idList.Add(id);
                 }
 
                 XmlNode contNode = doc.SelectSingleNode("/api/continue");
                 if (contNode == null)
                     break;
-                var continueQueryAttr = contNode.Attributes["continue"];
-                var continueGcmAttr = contNode.Attributes["gcmcontinue"];
-                var continueRvAttr = contNode.Attributes["rvcontinue"];
-                continueQuery = continueQueryAttr == null ? null : continueQueryAttr.Value;
-                continueGcm = continueGcmAttr == null ? null : continueGcmAttr.Value;
-                continueRv = continueRvAttr == null ? null : continueRvAttr.Value;
+                sroffset = contNode.Attributes["sroffset"].InnerText;
             }
             Console.WriteLine(" Done");
-            return ids;
+
+            return idList;
+        }
+
+        bool EditPage(string csrfToken, string timestamp, string title, string summary, string text)
+        {
+            string xml = wpApi.PostRequest(
+                "action", "edit",
+                "format", "xml",
+                "bot", "true",
+                "title", title,
+                "summary", summary,
+                "text", text,
+                "basetimestamp", timestamp,
+                "token", csrfToken);
+
+            XmlDocument doc = new XmlDocument();
+            doc.LoadXml(xml);
+
+            if (doc.SelectNodes("/api/error").Count == 1)
+                return false;
+            return doc.SelectSingleNode("/api/edit").Attributes["result"].InnerText == "Success";
+        }
+
+        void MakeReplacements()
+        {
+            Console.Write("Making replacements");
+            var articles = db.Articles.
+                Where(a => a.Status == ProcessStatus.NotProcessed && a.DstRepl != null).
+                OrderBy(a => a.Title).ToArray();
+
+            foreach (var article in articles)
+            {
+                string ReplWikiText =
+                    article.SrcWikiText.Replace(article.SrcRepl, article.DstRepl);
+                bool isEditSuccessful = EditPage(csrfToken, article.Timestamp,
+                    article.Title, "перевод на hlist", ReplWikiText);
+                article.Status = isEditSuccessful ? ProcessStatus.Success : ProcessStatus.Failure;
+                db.Update(article);
+                Console.Write(isEditSuccessful ? '.' : 'x');
+            }
+
+            Console.WriteLine(" Done");
         }
 
         Program()
         {
             wpApi = new MwApi("ru.wikipedia.org");
-            var ids = ScanCategory("Категория:Водные объекты по алфавиту");
-            DownloadArticles(ids);
+            var ids = SearchArticles("t: hastemplate:nobr insource:/ •\\}\\}/");
+            DownloadArticles(ids.ToArray());
             ProcessArticles();
+            ObtainEditToken();
+            MakeReplacements();
         }
 
         static void Main(string[] args)
