@@ -144,21 +144,39 @@ namespace WikiTasks
                 "Категория:Реки до 5 км в длину"
             };
 
+            string[] catMouthList = new string[]
+            {
+                "Категория:Карточка реки: заполнить: Координаты устья реки свыше пятидесяти км",
+                "Категория:Карточка реки: заполнить: Координаты устья реки свыше десяти км",
+                "Категория:Карточка реки: заполнить: Координаты устья"
+            };
+
+
             Console.Write("Scanning category");
             var articles = ScanCategoryA(
-                "Категория:Википедия:Статьи о реках, требующие проверки", catLenList);
+                "Категория:Википедия:Статьи о реках, требующие проверки",
+                catLenList.Concat(catMouthList).ToArray());
             Console.WriteLine(" Done");
 
             Console.Write("Processing...");
             var reorderedArticles = new List<Article>();
-            for (int i = 0; i < catLenList.Length; i++)
+            foreach (bool hasMouth in new[] { false, true })
             {
-                var sameLenCatArticles = new List<Article>();
-                foreach (Article article in articles)
-                    if (article.Categories.Contains(catLenList[i]))
-                        sameLenCatArticles.Add(article);
-                sameLenCatArticles.Shuffle();
-                reorderedArticles.AddRange(sameLenCatArticles);
+                for (int j = 0; j < catLenList.Length; j++)
+                {
+                    var sameLenCatArticles = new List<Article>();
+                    foreach (Article article in articles)
+                    {
+                        bool cond = article.Categories.Any(cat => catMouthList.Contains(cat));
+                        if (hasMouth)
+                            cond = !cond;
+                        cond = cond && article.Categories.Contains(catLenList[j]);
+                        if (cond)
+                            sameLenCatArticles.Add(article);
+                    }
+                    sameLenCatArticles.Shuffle();
+                    reorderedArticles.AddRange(sameLenCatArticles);
+                }
             }
             var noLenInfoArticles = articles.Except(reorderedArticles).ToArray();
             noLenInfoArticles.Shuffle();
