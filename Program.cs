@@ -1,163 +1,55 @@
-﻿using Antlr4.Runtime;
-using LinqToDB;
+﻿using LinqToDB;
 using LinqToDB.Mapping;
 using System;
 using System.Collections.Generic;
-using System.Diagnostics;
-using System.Globalization;
-using System.IO;
 using System.Linq;
-using System.Text;
 using System.Text.RegularExpressions;
-using System.Threading;
-using System.Threading.Tasks;
 using System.Xml;
 
 namespace WikiTasks
 {
-    [Table(Name = "Articles")]
-    class Article
+    public enum ProcessStatus
+    {
+        NotProcessed = 0,
+        Success = 1,
+        Failure = 2,
+        Skipped = 3
+    }
+
+    [Table(Name = "Pages")]
+    class Page
     {
         [PrimaryKey]
         public int PageId;
         [Column()]
         public int RevisionId;
         [Column()]
+        public string Timestamp;
+        [Column()]
         public string Title;
         [Column()]
         public string SrcWikiText;
-
-        public List<string> Errors;
-        public Template Template;
-
-        public string TemplateNameNorm;
-        public string TemplateName;
-        public string TitleName;
+        [Column()]
+        public string SrcRepl;
+        [Column()]
+        public string DstRepl;
+        [Column()]
+        public ProcessStatus Status;
     };
 
     class Db : LinqToDB.Data.DataConnection
     {
         public Db() : base("Db") { }
 
-        public ITable<Article> Articles { get { return GetTable<Article>(); } }
-    }
-
-    class TemplateParam
-    {
-        public bool Newline;
-        public int Sp1;
-        public int Sp2;
-        public string Name;
-        public int Sp3;
-        public int Sp4;
-        public string Value;
-        // Отключено для экономии памяти
-        // public IParseTree[] ValueTrees;
-    }
-
-    class Template
-    {
-        public Template()
-        {
-            Params = new List<TemplateParam>();
-        }
-
-        public TemplateParam this[string name]
-        {
-            get
-            {
-                var pl = Params.Where(p => p.Name == name).ToArray();
-                if (pl.Length == 0)
-                    return null;
-                else if (pl.Length == 1)
-                    return pl[0];
-                else
-                    throw new Exception();
-            }
-        }
-
-        public TemplateParam this[int index]
-        {
-            get
-            {
-                return Params[index];
-            }
-        }
-
-        public bool HaveZeroNewlines()
-        {
-            if (Params.Count == 0)
-                return true;
-            return Params.All(p => !p.Newline);
-        }
-
-        public void Reformat()
-        {
-            var v = Params.Where(p => p.Value != "").Select(p => p.Sp4).Distinct().ToArray();
-            bool std = v.Length == 1 && v[0] == 1;
-
-            for (int i = 1; i < Params.Count; i++)
-            {
-                if (Params[i].Newline &&
-                    Params[i - 1].Value == "")
-                {
-                    if (std)
-                        Params[i - 1].Sp4 = 1;
-                    else
-                        Params[i - 1].Sp4 = Params[i - 1].Sp4 >= 1 ? 1 : 0;
-                }
-            }
-        }
-
-        public int GetIndex(TemplateParam param)
-        {
-            return Params.FindIndex(p => p == param);
-        }
-
-        public void InsertAfter(TemplateParam param, TemplateParam newParam)
-        {
-            if (Params.Where(p => p.Name == newParam.Name).Count() != 0)
-                throw new Exception();
-            Params.Insert(Params.FindIndex(p => p == param) + 1, newParam);
-        }
-
-        public void Remove(string paramName)
-        {
-            Params.RemoveAll(p => p.Name == paramName);
-        }
-
-        public override string ToString()
-        {
-            var sb = new StringBuilder();
-            sb.Append("{{");
-            sb.Append(Name);
-            foreach (var param in Params)
-            {
-                if (param.Newline)
-                    sb.Append('\n');
-                sb.Append(new string(' ', param.Sp1));
-                sb.Append('|');
-                sb.Append(new string(' ', param.Sp2));
-                sb.Append(param.Name);
-                sb.Append(new string(' ', param.Sp3));
-                sb.Append('=');
-                sb.Append(new string(' ', param.Sp4));
-                sb.Append(param.Value);
-            }
-            if (!HaveZeroNewlines())
-                sb.Append("\n");
-            sb.Append("}}");
-            return sb.ToString();
-        }
-
-        public string Name;
-        public List<TemplateParam> Params;
+        public ITable<Page> Pages { get { return GetTable<Page>(); } }
     }
 
     class Program
     {
         MwApi wpApi;
         static Db db;
+
+        string csrfToken;
 
         List<List<T>> SplitToChunks<T>(T[] elements, int chunkSize)
         {
@@ -186,9 +78,9 @@ namespace WikiTasks
                 GetSchema(db).Tables.Any(t => t.TableName == name);
         }
 
-        List<Article> DeserializeArticles(string xml)
+        List<Page> DeserializePages(string xml)
         {
-            List<Article> articles = new List<Article>();
+            List<Page> pages = new List<Page>();
 
             XmlDocument doc = new XmlDocument();
             doc.LoadXml(xml);
@@ -198,26 +90,28 @@ namespace WikiTasks
                 if (pageNode.Attributes["missing"] != null)
                     continue;
 
-                Article article = new Article();
-                article.Title = pageNode.Attributes["title"].Value;
-                article.PageId = int.Parse(pageNode.Attributes["pageid"].Value);
+                Page page = new Page();
+                page.Title = pageNode.Attributes["title"].Value;
+                page.PageId = int.Parse(pageNode.Attributes["pageid"].Value);
 
                 XmlNode revNode = pageNode.SelectSingleNode("revisions/rev");
-                article.SrcWikiText = revNode.InnerText;
-                article.RevisionId = int.Parse(revNode.Attributes["revid"].Value);
+                page.SrcWikiText = revNode.InnerText;
+                page.RevisionId = int.Parse(revNode.Attributes["revid"].Value);
+                if (revNode.Attributes["timestamp"] != null)
+                    page.Timestamp = revNode.Attributes["timestamp"].Value;
 
-                articles.Add(article);
+                pages.Add(page);
             }
 
-            return articles;
+            return pages;
         }
 
-        void DownloadArticles(Dictionary<int, int> ids)
+        void DownloadPages(Dictionary<int, int> ids)
         {
-            if (!HaveTable("Articles"))
-                db.CreateTable<Article>();
+            if (!HaveTable("Pages"))
+                db.CreateTable<Page>();
 
-            var dbids = db.Articles.ToDictionary(a => a.PageId, a => a.RevisionId);
+            var dbids = db.Pages.ToDictionary(a => a.PageId, a => a.RevisionId);
 
 
             var idsset = new HashSet<int>(ids.Keys);
@@ -232,9 +126,9 @@ namespace WikiTasks
                 changed.ToDictionary(id => id, id => false)).ToDictionary(
                 kv => kv.Key, kv => kv.Value);
 
-            db.Articles.Delete(a => deleted.Contains(a.PageId));
+            db.Pages.Delete(a => deleted.Contains(a.PageId));
 
-            Console.Write("Downloading articles");
+            Console.Write("Downloading pages");
             var chunks = SplitToChunks(todl.Keys.OrderBy(x => x).ToArray(), 100);
             foreach (var chunk in chunks)
             {
@@ -242,180 +136,46 @@ namespace WikiTasks
                 string xml = wpApi.PostRequest(
                     "action", "query",
                     "prop", "revisions",
-                    "rvprop", "ids|content",
+                    "rvprop", "ids|timestamp|content",
                     "rvslots", "main",
                     "format", "xml",
                     "pageids", idsChunk);
                 Console.Write('.');
 
-                List<Article> articles = DeserializeArticles(xml);
+                List<Page> pages = DeserializePages(xml);
                 db.BeginTransaction();
-                foreach (Article a in articles)
-                    if (todl[a.PageId])
-                        db.Insert(a);
+                foreach (Page page in pages)
+                    if (todl[page.PageId])
+                        db.Insert(page);
                     else
-                        db.Update(a);
+                        db.Update(page);
                 db.CommitTransaction();
             }
             Console.WriteLine(" Done");
         }
 
-        void ProcessArticles()
+        Dictionary<int, int> SearchPages(string query, string ns = "0")
         {
-            int processed = 0;
-            int lexerErrors = 0;
-            int parserErrors = 0;
-
-            var articles = db.Articles.ToArray();
-            //var articles = db.Articles.Take(5000).ToArray();
-            //var articles = db.Articles.Where(a => a.Title == "Мюра (водопады)").ToArray();
-
-            Console.Write("Parsing articles");
-            Stopwatch stopwatch = new Stopwatch();
-            stopwatch.Start();
-            Parallel.ForEach(articles, article =>
-            {
-                AntlrErrorListener ael = new AntlrErrorListener();
-                AntlrInputStream inputStream = new AntlrInputStream(article.SrcWikiText);
-                WikiLexer lexer = new WikiLexer(inputStream);
-                lexer.RemoveErrorListeners();
-                lexer.AddErrorListener(ael);
-                CommonTokenStream commonTokenStream = new CommonTokenStream(lexer);
-                WikiParser parser = new WikiParser(commonTokenStream);
-                parser.RemoveErrorListeners();
-                parser.AddErrorListener(ael);
-                WikiParser.InitContext initContext = parser.init();
-                WikiVisitor visitor = new WikiVisitor(article,
-                    new string[] { "Водохранилище", "Озеро", "Пруд", "Река", "Канал",
-                    "Море", "Залив", "Пролив", "Группа озёр", "Водопад", "Морское течение",
-                    "Ледник", "Болото", "Речной порог", "Водный источник", "Солончак",
-                    "Родник", "Заповедная зона" }, null);
-                visitor.VisitInit(initContext);
-                article.Errors = ael.ErrorList;
-
-                Interlocked.Add(ref lexerErrors, ael.LexerErrors);
-                Interlocked.Add(ref parserErrors, ael.ParserErrors);
-
-                if (Interlocked.Increment(ref processed) % 100 == 0)
-                    Console.Write('.');
-            });
-            stopwatch.Stop();
-
-            Console.WriteLine(" Done");
-            Console.WriteLine(" Articles: " + articles.Count());
-            Console.WriteLine(" Parser errors: " + parserErrors);
-            Console.WriteLine(" Lexer errors: " + lexerErrors);
-            Console.WriteLine(" Parsing time: " + stopwatch.Elapsed.TotalSeconds + " sec");
-
-            List<string> errorLog = new List<string>();
-            foreach (Article article in articles)
-            {
-                if (article.Errors == null)
-                    continue;
-                if (article.Errors.Count == 0)
-                    continue;
-                errorLog.Add("Статья: " + article.Title);
-                errorLog.AddRange(article.Errors);
-            }
-            File.WriteAllLines("error_log.txt", errorLog.ToArray(), Encoding.UTF8);
-
-            Thread.CurrentThread.CurrentCulture = CultureInfo.InvariantCulture;
-
-            var l1 = new List<string>();
-            var l2 = new List<string>();
-
-            Console.Write("Processing...");
-
-            string[] toReplace = { "водохранилище", "озеро", "пруд-накопитель", "пруд", "сардоба",
-                "горный парк", "река", "канал", "болото", "пролив", "водопады", "водопад", "ручей",
-                "ледник", "море", "минеральная вода", "залив", "бухта", "губа", "лагуна", "овраг" };
-
-
-            string[] blacklist = { "/", "{", ",", "(", "<" };
-
-            foreach (Article article in articles)
-            {
-                article.TitleName = Regex.Replace(article.Title, "\\([^)]+\\)", "").Trim();
-                foreach (var replName in toReplace)
-                {
-                    article.TitleName = article.TitleName.Replace(replName, "");
-                    article.TitleName = article.TitleName.Replace(
-                        replName.First().ToString().ToUpper() + replName.Substring(1), "");
-                }
-                article.TitleName = article.TitleName.Trim();
-
-                if (article.Template == null)
-                    continue;
-
-                if (article.Template["Название"] != null)
-                {
-                    article.TemplateName = article.Template["Название"].Value;
-                    if (blacklist.Any(ble => article.TemplateName.Contains(ble)))
-                        article.TemplateName = null;
-                }
-
-                if (article.TemplateName != null)
-                {
-                    article.TemplateNameNorm = article.TemplateName;
-                    article.TemplateNameNorm = article.TemplateNameNorm.Replace("́", "");
-                    article.TemplateNameNorm = article.TemplateNameNorm.Replace("&nbsp;", " ");
-                    foreach (var replName in toReplace)
-                    {
-                        article.TemplateNameNorm = article.TemplateNameNorm.Replace(replName, "");
-                        article.TemplateNameNorm = article.TemplateNameNorm.Replace(
-                            replName.First().ToString().ToUpper() + replName.Substring(1), "");
-                    }
-                    article.TemplateNameNorm = article.TemplateNameNorm.Trim();
-                }
-            }
-
-            var sb = new StringBuilder();
-
-            sb.AppendLine("{|class=\"wikitable sortable\"");
-            sb.AppendLine("!№");
-            sb.AppendLine("!Статья");
-            sb.AppendLine("!Название в карточке");
-            int i = 1;
-            foreach (Article article in articles.
-                Where(a => a.TemplateNameNorm != null &&
-                a.TemplateNameNorm != a.TitleName).OrderBy(a => a.Title))
-            {
-                var colorizedTemplateName = Regex.Replace(
-                    article.TemplateName, "([a-zA-Z]+)", "{{color|crimson|$1}}");
-                sb.AppendLine("|-");
-                sb.AppendLine($"| {i}");
-                sb.AppendLine($"| [[{article.Title}]]");
-                sb.AppendLine($"| {colorizedTemplateName}");
-                i++;
-            }
-            sb.AppendLine("|}");
-            sb.AppendLine();
-            sb.AppendLine("[[Категория:Проект:Водные объекты/Текущие события]]");
-
-            File.WriteAllText("result.txt", sb.ToString());
-            Console.WriteLine(" Done");
-        }
-
-        Dictionary<int, int> ScanCategory(string category)
-        {
-            Console.Write("Scanning category");
+            Console.Write("Searching pages");
             var ids = new Dictionary<int, int>();
 
             string continueQuery = null;
-            string continueGcm = null;
+            string continueGsr = null;
             string continueRv = null;
             for (;;)
             {
                 string xml = wpApi.PostRequest(
                     "action", "query",
-                    "generator", "categorymembers",
+                    "generator", "search",
                     "prop", "revisions",
                     "rvprop", "ids",
-                    "gcmprop", "ids",
-                    "gcmtype", "page",
-                    "gcmtitle", category,
-                    "gcmlimit", "max",
-                    "gcmcontinue", continueGcm,
+                    "gsrwhat", "text",
+                    "gsrsearch", query,
+                    "gsrnamespace", ns,
+                    "gsrprop", "",
+                    "gsrinfo", "",
+                    "gsrlimit", "4999", // hack for T213745
+                    "gsroffset", continueGsr,
                     "rvcontinue", continueRv,
                     "continue", continueQuery,
                     "format", "xml");
@@ -423,6 +183,13 @@ namespace WikiTasks
 
                 XmlDocument doc = new XmlDocument();
                 doc.LoadXml(xml);
+
+                XmlNode errNode = doc.SelectSingleNode("/api/error");
+                if (errNode != null)
+                {
+                    throw new Exception(
+                        $"{errNode.Attributes["code"].Value}: {errNode.Attributes["info"].Value}");
+                }
 
                 foreach (XmlNode node in doc.SelectNodes("/api/query/pages/page"))
                 {
@@ -436,22 +203,119 @@ namespace WikiTasks
                 if (contNode == null)
                     break;
                 var continueQueryAttr = contNode.Attributes["continue"];
-                var continueGcmAttr = contNode.Attributes["gcmcontinue"];
+                var continueGsrAttr = contNode.Attributes["gsroffset"];
                 var continueRvAttr = contNode.Attributes["rvcontinue"];
                 continueQuery = continueQueryAttr == null ? null : continueQueryAttr.Value;
-                continueGcm = continueGcmAttr == null ? null : continueGcmAttr.Value;
+                continueGsr = continueGsrAttr == null ? null : continueGsrAttr.Value;
                 continueRv = continueRvAttr == null ? null : continueRvAttr.Value;
             }
             Console.WriteLine(" Done");
             return ids;
         }
 
+        void ObtainEditToken()
+        {
+            Console.Write("Authenticating...");
+            csrfToken = wpApi.GetToken("csrf");
+            if (csrfToken == null)
+            {
+                Console.WriteLine(" Failed");
+                throw new Exception();
+            }
+            Console.WriteLine(" Done");
+        }
+
+        bool EditPage(string csrfToken, string timestamp, string title, string summary, string text)
+        {
+            string xml = wpApi.PostRequest(
+                "action", "edit",
+                "format", "xml",
+                "bot", "true",
+                "title", title,
+                "summary", summary,
+                "text", text,
+                "basetimestamp", timestamp,
+                "token", csrfToken);
+
+            XmlDocument doc = new XmlDocument();
+            doc.LoadXml(xml);
+
+            if (doc.SelectNodes("/api/error").Count == 1)
+                return false;
+            return doc.SelectSingleNode("/api/edit").Attributes["result"].InnerText == "Success";
+        }
+
+        void ProcessPages()
+        {
+            Console.Write("Processing pages...");
+            var pages = db.Pages.Where(p => p.Status == ProcessStatus.NotProcessed).ToArray();
+
+            foreach (var p in pages)
+            {
+                p.SrcRepl = null;
+                p.DstRepl = null;
+
+                var nameMatch = Regex.Match(p.Title, "^Шаблон:(.+)/doc$");
+                if (!nameMatch.Success)
+                    continue;
+                var templateName = nameMatch.Groups[1].Value;
+                var templateNameLC = char.ToLowerInvariant(templateName[0]) + templateName.Substring(1);
+
+                var wikiMatches = Regex.Matches(p.SrcWikiText,
+                    "(\\{\\{" + $"({Regex.Escape(templateName)}|{Regex.Escape(templateNameLC)})" +
+                    ".+?)[ \t\n]*<pre( +style=\"overflow *: *auto\")?>[ \t\n]*\\1[ \t\n]*</pre>",
+                    RegexOptions.Singleline);
+                if (wikiMatches.Count != 1)
+                    continue;
+
+                string templateInvocation = wikiMatches[0].Groups[1].Value;
+                if (templateInvocation.Length < 40)
+                    continue;
+
+                bool pre = !templateInvocation.Contains('\n');
+
+                p.SrcRepl = wikiMatches[0].Value;
+                p.DstRepl = "{{demo|reverse=1" + (pre ? "|tag=pre" : "") +
+                    "|br=|<nowiki>\n" + templateInvocation + "\n</nowiki>}}";
+            }
+            db.BeginTransaction();
+            foreach (var p in pages)
+                db.Update(p);
+            db.CommitTransaction();
+            Console.WriteLine(" Done");
+        }
+
+        void MakeReplacements()
+        {
+            Console.Write("Making replacements");
+            var pages = db.Pages.
+                Where(a => a.Status == ProcessStatus.NotProcessed && a.DstRepl != null).
+                OrderBy(a => a.Title).ToArray();
+
+            foreach (var page in pages)
+            {
+                string ReplWikiText =
+                    page.SrcWikiText.Replace(page.SrcRepl, page.DstRepl);
+                bool isEditSuccessful = EditPage(csrfToken, page.Timestamp,
+                    page.Title, "устранение дублирования", ReplWikiText);
+                page.Status = isEditSuccessful ? ProcessStatus.Success : ProcessStatus.Failure;
+                db.Update(page);
+                Console.Write(isEditSuccessful ? '.' : 'x');
+            }
+
+            Console.WriteLine(" Done");
+        }
+
+
         Program()
         {
             wpApi = new MwApi("ru.wikipedia.org");
-            var ids = ScanCategory("Категория:Водные объекты по алфавиту");
-            DownloadArticles(ids);
-            ProcessArticles();
+            var ids = SearchPages(
+                "t: hastemplate:docpage insource:/\\{\\{docpage/ insource:/\\<pre/");
+            DownloadPages(ids);
+            ProcessPages();
+            ObtainEditToken();
+            MakeReplacements();
         }
 
         static void Main(string[] args)

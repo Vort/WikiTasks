@@ -64,26 +64,16 @@
     <Reference Include="System.Xml" />
   </ItemGroup>
   <ItemGroup>
-    <Compile Include="AntlrErrorListener.cs" />
     <Compile Include="Api.cs" />
     <Compile Include="Program.cs" />
     <Compile Include="Properties\AssemblyInfo.cs" />
     <Compile Include="MwApi.cs" />
-    <Compile Include="WikiVisitor.cs" />
   </ItemGroup>
   <ItemGroup>
     <None Include="App.config">
       <SubType>Designer</SubType>
     </None>
     <None Include="packages.config" />
-    <Antlr4 Include="WikiLexer.g4">
-      <Generator>MSBuild:Compile</Generator>
-      <CustomToolNamespace>WikiTasks</CustomToolNamespace>
-    </Antlr4>
-    <Antlr4 Include="WikiParser.g4">
-      <Generator>MSBuild:Compile</Generator>
-      <CustomToolNamespace>WikiTasks</CustomToolNamespace>
-    </Antlr4>
   </ItemGroup>
   <Import Project="$(MSBuildToolsPath)\Microsoft.CSharp.targets" />
   <Target Name="EnsureNuGetPackageBuildImports" BeforeTargets="PrepareForBuild">
