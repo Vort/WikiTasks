@@ -1,5 +1,4 @@
-﻿using LinqToDB.Mapping;
-using System.Collections.Generic;
+﻿using System.Collections.Generic;
 
 namespace WikiTasks
 {
@@ -26,31 +25,18 @@ namespace WikiTasks
         public string Raw;
     }
 
-    [Table(Name = "Replacements")]
     public class Replacement
     {
-        [PrimaryKey]
-        public int Id;
-        [Column()]
         public int PageId;
-        [Column()]
         public string SrcString;
-        [Column()]
         public string DstString;
-        [Column()]
-        public byte Status;
     }
 
-    [Table(Name = "Articles")]
     public class Article
     {
-        [PrimaryKey]
         public int PageId;
-        [Column()]
         public string Timestamp;
-        [Column()]
         public string Title;
-        [Column()]
         public string WikiText;
         public List<FileInvoke> FileInvokes;
         public List<string> Errors;

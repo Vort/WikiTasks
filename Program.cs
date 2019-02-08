@@ -1,5 +1,4 @@
 ﻿using Antlr4.Runtime;
-using LinqToDB;
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
@@ -13,31 +12,27 @@ using System.Xml;
 
 namespace WikiTasks
 {
-    public class Db : LinqToDB.Data.DataConnection
-    {
-        public Db() : base("Db") { }
-
-        public ITable<Article> Articles { get { return GetTable<Article>(); } }
-        public ITable<Replacement> Replacements { get { return GetTable<Replacement>(); } }
-    }
-
     class Program
     {
+        MwApi wpApi;
+        string csrfToken;
+
         bool remoteMode = true;
 
-        WpApi api;
-        static Db db;
+        List<Article> articles;
+        List<Replacement> replacements;
 
-        void GetLintErrors(string errorCategory)
+
+        int[] GetLintErrors(string errorCategory)
         {
-            db.CreateTable<Article>();
+            var idList = new List<int>();
 
             string lntfrom = "";
             Console.Write("Searching for lint errors...");
             for (;;)
             {
                 string continueParam = "";
-                string xml = api.PostRequest(
+                string xml = wpApi.PostRequest(
                     "action", "query",
                     "list", "linterrors",
                     "format", "xml",
@@ -51,13 +46,11 @@ namespace WikiTasks
                 XmlDocument doc = new XmlDocument();
                 doc.LoadXml(xml);
 
-                db.BeginTransaction();
                 foreach (XmlNode pNode in doc.SelectNodes("/api/query/linterrors/_v"))
                 {
                     int id = int.Parse(pNode.Attributes["pageid"].InnerText);
-                    db.InsertOrReplace(new Article() { PageId = id });
+                    idList.Add(id);
                 }
-                db.CommitTransaction();
 
                 XmlNode contNode = doc.SelectSingleNode("/api/continue");
                 if (contNode == null)
@@ -66,22 +59,23 @@ namespace WikiTasks
                 continueParam = contNode.Attributes["continue"].InnerText;
             }
             Console.WriteLine(" Done");
+            return idList.ToArray();
         }
 
-        List<List<int>> SplitToChunks(List<int> ids, int chunkSize)
+        List<List<T>> SplitToChunks<T>(T[] elements, int chunkSize)
         {
-            int chunkCount = (ids.Count + chunkSize - 1) / chunkSize;
+            int chunkCount = (elements.Length + chunkSize - 1) / chunkSize;
 
-            List<List<int>> chunks = new List<List<int>>();
+            var chunks = new List<List<T>>();
             for (int i = 0; i < chunkCount; i++)
             {
-                List<int> chunk = new List<int>();
+                var chunk = new List<T>();
                 for (int j = 0; j < chunkSize; j++)
                 {
                     int k = i * chunkSize + j;
-                    if (k >= ids.Count)
+                    if (k >= elements.Length)
                         break;
-                    chunk.Add(ids[k]);
+                    chunk.Add(elements[k]);
                 }
                 chunks.Add(chunk);
             }
@@ -89,7 +83,7 @@ namespace WikiTasks
             return chunks;
         }
 
-        List<Article> GetArticles(string xml)
+        List<Article> DeserializeArticles(string xml)
         {
             List<Article> articles = new List<Article>();
 
@@ -102,13 +96,13 @@ namespace WikiTasks
                     continue;
 
                 Article article = new Article();
-                article.Title = pageNode.Attributes["title"].InnerText;
-                article.PageId = int.Parse(pageNode.Attributes["pageid"].InnerText);
+                article.Title = pageNode.Attributes["title"].Value;
+                article.PageId = int.Parse(pageNode.Attributes["pageid"].Value);
 
                 XmlNode revNode = pageNode.SelectSingleNode("revisions/rev");
                 article.WikiText = revNode.InnerText;
                 if (revNode.Attributes["timestamp"] != null)
-                    article.Timestamp = revNode.Attributes["timestamp"].InnerText;
+                    article.Timestamp = revNode.Attributes["timestamp"].Value;
 
                 articles.Add(article);
             }
@@ -116,51 +110,41 @@ namespace WikiTasks
             return articles;
         }
 
-        void DownloadArticles()
+        void DownloadArticles(int[] ids)
         {
             Console.Write("Downloading articles");
-            var updChunks = SplitToChunks(
-                db.Articles.Select(a => a.PageId).ToList(), 50);
-            foreach (List<int> chunk in updChunks)
+            articles = new List<Article>();
+            var chunks = SplitToChunks(ids, 100);
+            foreach (var chunk in chunks)
             {
-                string idss = string.Join("|", chunk);
-                string xml = api.PostRequest(
+                string idsChunk = string.Join("|", chunk);
+                string xml = wpApi.PostRequest(
                     "action", "query",
                     "prop", "revisions",
                     "rvprop", "timestamp|content",
                     "format", "xml",
-                    "pageids", idss);
+                    "pageids", idsChunk);
                 Console.Write('.');
-
-                List<Article> articles = GetArticles(xml);
-                db.BeginTransaction();
-                foreach (Article a in articles)
-                    db.Update(a);
-                db.CommitTransaction();
+                articles.AddRange(DeserializeArticles(xml));
             }
             Console.WriteLine(" Done");
         }
 
-        string GetToken(string type)
+        void ObtainEditToken()
         {
-            string xml = api.PostRequest(
-                "action", "query",
-                "format", "xml",
-                "meta", "tokens",
-                "type", type);
-
-            XmlDocument doc = new XmlDocument();
-            doc.LoadXml(xml);
-
-            if (doc.SelectNodes("/api/error").Count == 1)
-                return null;
-
-            return doc.SelectNodes("/api/query/tokens")[0].Attributes[type + "token"].InnerText;
+            Console.Write("Authenticating...");
+            csrfToken = wpApi.GetToken("csrf");
+            if (csrfToken == null)
+            {
+                Console.WriteLine(" Failed");
+                throw new Exception();
+            }
+            Console.WriteLine(" Done");
         }
 
         bool EditPage(string csrfToken, string timestamp, int pageId, string summary, string text)
         {
-            string xml = api.PostRequest(
+            string xml = wpApi.PostRequest(
                 "action", "edit",
                 "format", "xml",
                 "bot", "true",
@@ -176,12 +160,6 @@ namespace WikiTasks
             if (doc.SelectNodes("/api/error").Count == 1)
                 return false;
             return doc.SelectSingleNode("/api/edit").Attributes["result"].InnerText == "Success";
-        }
-
-        static bool HaveTable(string name)
-        {
-            return db.DataProvider.GetSchemaProvider().
-                GetSchema(db).Tables.Any(t => t.TableName == name);
         }
 
         class ParamsEqualityComparer : IEqualityComparer<string>
@@ -260,8 +238,6 @@ namespace WikiTasks
             int lexerErrors = 0;
             int parserErrors = 0;
 
-            var articles = db.Articles.ToList();
-
             Console.Write("Parsing articles");
             Stopwatch stopwatch = new Stopwatch();
             stopwatch.Start();
@@ -287,18 +263,15 @@ namespace WikiTasks
                 Interlocked.Add(ref lexerErrors, ael.LexerErrors);
                 Interlocked.Add(ref parserErrors, ael.ParserErrors);
 
-                if (Interlocked.Increment(ref processed) % 50 == 0)
+                if (Interlocked.Increment(ref processed) % 100 == 0)
                     Console.Write('.');
             });
             stopwatch.Stop();
 
 
-            if (HaveTable("Replacements"))
-                db.DropTable<Replacement>();
-            db.CreateTable<Replacement>();
-            int id = 0;
+            replacements = new List<Replacement>();
+
             var pec = new ParamsEqualityComparer();
-            db.BeginTransaction();
             foreach (var article in articles)
             {
                 if (article.FileInvokes.Count == 0)
@@ -313,18 +286,15 @@ namespace WikiTasks
                     r.PageId = article.PageId;
                     r.SrcString = inv.Raw;
                     r.DstString = inv.ToString();
-                    r.Id = id;
-                    id++;
                     if (r.SrcString != r.DstString)
-                        db.Insert(r);
+                        replacements.Add(r);
                 }
             }
-            db.CommitTransaction();
 
             Console.WriteLine(" Done");
             Console.WriteLine(" Articles: " + articles.Count);
             Console.WriteLine(" Invokes: " + articles.Sum(a => a.FileInvokes.Count()));
-            Console.WriteLine(" Replacements: " + db.Replacements.Count());
+            Console.WriteLine(" Replacements: " + replacements.Count());
             Console.WriteLine(" Parser errors: " + parserErrors);
             Console.WriteLine(" Lexer errors: " + lexerErrors);
             Console.WriteLine(" Parsing time: " + stopwatch.Elapsed.TotalSeconds + " sec");
@@ -336,7 +306,7 @@ namespace WikiTasks
             var sb = new StringBuilder();
 
             sb.AppendLine("<small>");
-            foreach (var r in db.Replacements)
+            foreach (var r in replacements)
             {
                 sb.AppendLine("[[" + articles.First(a => a.PageId == r.PageId).Title + "]]:");
                 sb.AppendLine();
@@ -368,28 +338,19 @@ namespace WikiTasks
         {
             Console.Write("Making replacements");
 
-            var articles = db.Articles.OrderByDescending(a => a.PageId).ToArray();
-            foreach (var article in articles)
+            foreach (var article in articles.OrderBy(a => a.Title).ToArray())
             {
-                var replacements = db.Replacements.Where(
-                    r => r.PageId == article.PageId && r.Status == 0).ToArray();
-                if (replacements.Length == 0)
+                var artReplacements = replacements.Where(
+                    r => r.PageId == article.PageId).ToArray();
+                if (artReplacements.Length == 0)
                     continue;
 
                 string newText = article.WikiText;
-                foreach (var replacement in replacements)
-                    newText = newText.Replace(replacement.SrcString, replacement.DstString);
+                foreach (var artReplacement in artReplacements)
+                    newText = newText.Replace(artReplacement.SrcString, artReplacement.DstString);
 
                 bool isEditSuccessful = EditPage(csrfToken, article.Timestamp,
                     article.PageId, "исправление разметки", newText);
-
-                db.BeginTransaction();
-                foreach (var replacement in replacements)
-                {
-                    replacement.Status = isEditSuccessful ? (byte)1 : (byte)2;
-                    db.Update(replacement);
-                }
-                db.CommitTransaction();
                 Console.Write(isEditSuccessful ? '.' : 'x');
             }
             Console.WriteLine(" Done");
@@ -397,48 +358,20 @@ namespace WikiTasks
 
         Program()
         {
-            Console.WriteLine($"[{DateTime.Now:dd.MM.yyyy HH:mm:ss}] WikiTasks started");
-
             if (remoteMode)
                 Console.WriteLine("Remote mode activated");
 
-            api = new WpApi();
-
-            Console.Write("Authenticating...");
-            string csrfToken = GetToken("csrf");
-            if (csrfToken == null)
-            {
-                Console.WriteLine(" Failed");
-                return;
-            }
-            Console.WriteLine(" Done");
-
-            if (remoteMode)
-            {
-                if (HaveTable("Articles"))
-                    db.DropTable<Article>();
-                if (HaveTable("Replacements"))
-                    db.DropTable<Replacement>();
-            }
-
-            if (!HaveTable("Articles"))
-            {
-                GetLintErrors("bogus-image-options");
-                DownloadArticles();
-            }
-
+            wpApi = new MwApi("ru.wikipedia.org");
+            var ids = GetLintErrors("bogus-image-options");
+            DownloadArticles(ids);
             ParseArticles();
+            ObtainEditToken();
             MakeReplacements(csrfToken);
-
-            Console.WriteLine($"[{DateTime.Now:dd.MM.yyyy HH:mm:ss}] WikiTasks finished");
-            Console.WriteLine();
         }
 
         static void Main(string[] args)
         {
-            db = new Db();
             new Program();
-            db.Dispose();
         }
     }
 }
