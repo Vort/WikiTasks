@@ -43,7 +43,7 @@ namespace WikiTasks
 
 
         public List<string> Errors;
-        public Template Template;
+        public List<Template> Templates;
     };
 
     class Db : LinqToDB.Data.DataConnection
@@ -292,7 +292,7 @@ namespace WikiTasks
                 parser.AddErrorListener(ael);
                 WikiParser.InitContext initContext = parser.init();
                 WikiVisitor visitor = new WikiVisitor(article,
-                    new string[] { "Навигационная полоса" }, null);
+                    new string[] { "Cite web" }, null);
                 visitor.VisitInit(initContext);
                 article.Errors = ael.ErrorList;
 
@@ -326,65 +326,32 @@ namespace WikiTasks
 
             Console.Write("Processing...");
 
-            var cnt = new List<string>();
-
-            var sb = new StringBuilder();
-
-            sb.AppendLine("{|class=\"wikitable sortable\"");
-            sb.AppendLine("!№");
-            sb.AppendLine("!Статья");
-            sb.AppendLine("!nobr");
-            sb.AppendLine("!hlist");
-            int i = 1;
-
-            foreach (Article article in articles.Where(a => a.Template != null))
-            {
-                article.SrcRepl = null;
-                article.DstRepl = null;
-
-                if (article.Template.ToString().Contains('*'))
-                    continue;
-                var p1 = article.Template["содержание"];
-                var p2 = article.Template["список"];
-                if (p1 == null && p2 == null)
-                    continue;
-                string content = p1 != null ? p1.Value : p2.Value;
-
-                var match = Regex.Match(content,
-                    "\\A[ \\n]*(\\<div( align=\\\"center\\\")?\\>)?[ \\n]*(\\{\\{(nobr|s|nowrap)\\|([^•}]+)• *\\}\\}[ \\n]*)+(\\{\\{(nobr|s|nowrap)\\|([^•}]+)\\}\\}[ \\n]*)?(\\<\\/div\\>)?[ \\n]*\\z",
-                    RegexOptions.Singleline);
-
-                if (!match.Success)
-                {
-                    cnt.Add(content);
-                    continue;
-                }
-
-                var values = 
-                    match.Groups[5].Captures.Cast<Capture>().Select(c => c.Value.Trim()).Concat(
-                    match.Groups[8].Captures.Cast<Capture>().Select(c => c.Value.Trim()));
-
-                var hlistValues = string.Concat(values.Select(v => $"\n* {v}"));
-
-                article.SrcRepl = content;
-                article.DstRepl = hlistValues;
-
-                sb.AppendLine("|-");
-                sb.AppendLine($"| {i}");
-                sb.AppendLine($"| [[{article.Title}]]");
-                sb.AppendLine($"| <small><code><nowiki>{content}</nowiki></code></small>");
-                sb.AppendLine($"| <small><code><nowiki>{hlistValues}</nowiki></code></small>");
-                i++;
-            }
-            sb.AppendLine("|}");
-
             db.BeginTransaction();
-            foreach (var article in articles)
+            foreach (Article article in articles)
+            {
+                var tl = article.Templates.Where(t => t["url"] != null &&
+                    t["url"].Value.Contains("://space.kursknet.ru/")).ToArray();
+                if (tl.Length != 1)
+                    continue;
+
+                var template = tl[0];
+                var deadlink = template["deadlink"];
+                var accessdate = template["accessdate"];
+
+                if (deadlink == null)
+                    continue;
+                if (deadlink.Value != "no")
+                    continue;
+
+                article.SrcRepl = template.ToString();
+                deadlink.Value = "yes";
+                if (accessdate != null)
+                    accessdate.Value = "2019-02-04";
+                article.DstRepl = template.ToString();
                 db.Update(article);
+            }
             db.CommitTransaction();
 
-            File.WriteAllLines("cnt.txt", cnt.Select(c => c + "\n\n"));
-            File.WriteAllText("repl.txt", sb.ToString());
             Console.WriteLine(" Done");
         }
 
@@ -460,7 +427,7 @@ namespace WikiTasks
                 string ReplWikiText =
                     article.SrcWikiText.Replace(article.SrcRepl, article.DstRepl);
                 bool isEditSuccessful = EditPage(csrfToken, article.Timestamp,
-                    article.Title, "перевод на hlist", ReplWikiText);
+                    article.Title, "сайт закрыт", ReplWikiText);
                 article.Status = isEditSuccessful ? ProcessStatus.Success : ProcessStatus.Failure;
                 db.Update(article);
                 Console.Write(isEditSuccessful ? '.' : 'x');
@@ -472,7 +439,7 @@ namespace WikiTasks
         Program()
         {
             wpApi = new MwApi("ru.wikipedia.org");
-            var ids = SearchArticles("t: hastemplate:nobr insource:/ •\\}\\}/");
+            var ids = SearchArticles("insource:/space\\.kursknet\\.ru/ hastemplate:\"cite web\"");
             DownloadArticles(ids.ToArray());
             ProcessArticles();
             ObtainEditToken();

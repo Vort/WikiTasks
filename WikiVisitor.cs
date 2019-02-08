@@ -1,4 +1,5 @@
 ﻿using Antlr4.Runtime.Tree;
+using System.Collections.Generic;
 using System.Linq;
 using System.Text.RegularExpressions;
 
@@ -10,11 +11,10 @@ namespace WikiTasks
 
         string[] templNames;
         string[] paramNames;
-        bool templateFound;
 
         public WikiVisitor(Article article, string[] templNames, string[] paramNames)
         {
-            templateFound = false;
+            article.Templates = new List<Template>();
             this.article = article;
             this.templNames = templNames != null ? templNames : new string[] { };
             this.paramNames = paramNames != null ? paramNames : new string[] { };
@@ -105,12 +105,7 @@ namespace WikiTasks
 
 
             if (templMatch || paramMatch)
-            {
-                if (templateFound)
-                    return null;
-                templateFound = true;
-                article.Template = template;
-            }
+                article.Templates.Add(template);
 
             return null;
         }
