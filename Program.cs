@@ -23,6 +23,15 @@ namespace WikiTasks
         Skipped = 3
     }
 
+    class ELinkInvoke
+    {
+        public int StartPosition;
+        public int EndPosition;
+        public string Text;
+        public string Url;
+        public string Title;
+    }
+
     [Table(Name = "Articles")]
     class Article
     {
@@ -35,136 +44,34 @@ namespace WikiTasks
         [Column()]
         public string SrcWikiText;
         [Column()]
-        public string SrcRepl;
-        [Column()]
-        public string DstRepl;
+        public string DstWikiText;
         [Column()]
         public ProcessStatus Status;
 
 
         public List<string> Errors;
-        public List<Template> Templates;
+        public List<ELinkInvoke> ElinkInvokes;
     };
+
+    [Table(Name = "GNISEntries")]
+    class GNISEntry
+    {
+        [PrimaryKey]
+        public int Id;
+        [Column()]
+        public string Name;
+    }
+
 
     class Db : LinqToDB.Data.DataConnection
     {
         public Db() : base("Db") { }
 
+        public ITable<GNISEntry> GNISEntries { get { return GetTable<GNISEntry>(); } }
+
         public ITable<Article> Articles { get { return GetTable<Article>(); } }
     }
-
-    class TemplateParam
-    {
-        public bool Newline;
-        public int Sp1;
-        public int Sp2;
-        public string Name;
-        public int Sp3;
-        public int Sp4;
-        public string Value;
-        // Отключено для экономии памяти
-        // public IParseTree[] ValueTrees;
-    }
-
-    class Template
-    {
-        public Template()
-        {
-            Params = new List<TemplateParam>();
-        }
-
-        public TemplateParam this[string name]
-        {
-            get
-            {
-                var pl = Params.Where(p => p.Name == name).ToArray();
-                if (pl.Length == 0)
-                    return null;
-                else if (pl.Length == 1)
-                    return pl[0];
-                else
-                    throw new Exception();
-            }
-        }
-
-        public TemplateParam this[int index]
-        {
-            get
-            {
-                return Params[index];
-            }
-        }
-
-        public bool HaveZeroNewlines()
-        {
-            if (Params.Count == 0)
-                return true;
-            return Params.All(p => !p.Newline);
-        }
-
-        public void Reformat()
-        {
-            var v = Params.Where(p => p.Value != "").Select(p => p.Sp4).Distinct().ToArray();
-            bool std = v.Length == 1 && v[0] == 1;
-
-            for (int i = 1; i < Params.Count; i++)
-            {
-                if (Params[i].Newline &&
-                    Params[i - 1].Value == "")
-                {
-                    if (std)
-                        Params[i - 1].Sp4 = 1;
-                    else
-                        Params[i - 1].Sp4 = Params[i - 1].Sp4 >= 1 ? 1 : 0;
-                }
-            }
-        }
-
-        public int GetIndex(TemplateParam param)
-        {
-            return Params.FindIndex(p => p == param);
-        }
-
-        public void InsertAfter(TemplateParam param, TemplateParam newParam)
-        {
-            if (Params.Where(p => p.Name == newParam.Name).Count() != 0)
-                throw new Exception();
-            Params.Insert(Params.FindIndex(p => p == param) + 1, newParam);
-        }
-
-        public void Remove(string paramName)
-        {
-            Params.RemoveAll(p => p.Name == paramName);
-        }
-
-        public override string ToString()
-        {
-            var sb = new StringBuilder();
-            sb.Append("{{");
-            sb.Append(Name);
-            foreach (var param in Params)
-            {
-                if (param.Newline)
-                    sb.Append('\n');
-                sb.Append(new string(' ', param.Sp1));
-                sb.Append('|');
-                sb.Append(new string(' ', param.Sp2));
-                sb.Append(param.Name);
-                sb.Append(new string(' ', param.Sp3));
-                sb.Append('=');
-                sb.Append(new string(' ', param.Sp4));
-                sb.Append(param.Value);
-            }
-            if (!HaveZeroNewlines())
-                sb.Append("\n");
-            sb.Append("}}");
-            return sb.ToString();
-        }
-
-        public string Name;
-        public List<TemplateParam> Params;
-    }
-
+    
     class Program
     {
         MwApi wpApi;
@@ -291,8 +198,7 @@ namespace WikiTasks
                 parser.RemoveErrorListeners();
                 parser.AddErrorListener(ael);
                 WikiParser.InitContext initContext = parser.init();
-                WikiVisitor visitor = new WikiVisitor(article,
-                    new string[] { "Cite web" }, null);
+                WikiVisitor visitor = new WikiVisitor(article);
                 visitor.VisitInit(initContext);
                 article.Errors = ael.ErrorList;
 
@@ -326,31 +232,79 @@ namespace WikiTasks
 
             Console.Write("Processing...");
 
+            var sb = new StringBuilder();
+
+            int i = 1;
+            sb.AppendLine("{|class=\"wide\" style=\"table-layout: fixed;word-wrap:break-word\"");
+            sb.AppendLine("!width=\"28px\"|№");
+            sb.AppendLine("!width=\"20%\"|Статья");
+            sb.AppendLine("!width=\"50%\"|Ссылка");
+            sb.AppendLine("!width=\"30%\"|Шаблон");
+
             db.BeginTransaction();
-            foreach (Article article in articles)
+            foreach (var article in articles.OrderBy(a => a.Title))
             {
-                var tl = article.Templates.Where(t => t["url"] != null &&
-                    t["url"].Value.Contains("://space.kursknet.ru/")).ToArray();
-                if (tl.Length != 1)
-                    continue;
+                foreach (var eli in article.ElinkInvokes)
+                {
+                    int gnisId = int.Parse(Regex.Match(eli.Url, "P3_FID:([0-9]+)").Groups[1].Value);
 
-                var template = tl[0];
-                var deadlink = template["deadlink"];
-                var accessdate = template["accessdate"];
+                    GNISEntry gnisEntry = db.GNISEntries.FirstOrDefault(e => e.Id == gnisId);
+                    var templText = $"{{{{GNIS|{gnisId}|{gnisEntry.Name}}}}}";
 
-                if (deadlink == null)
-                    continue;
-                if (deadlink.Value != "no")
-                    continue;
+                    var prev = Regex.Match(
+                        article.SrcWikiText.Substring(0, eli.StartPosition), "[>*\n] *([^>*\n]+)$", RegexOptions.Singleline).Groups[1].Value.Trim();
 
-                article.SrcRepl = template.ToString();
-                deadlink.Value = "yes";
-                if (accessdate != null)
-                    accessdate.Value = "2019-02-04";
-                article.DstRepl = template.ToString();
-                db.Update(article);
+                    var rest = Regex.Match(
+                        article.SrcWikiText.Substring(eli.EndPosition), "([^\n<]+)?").Groups[1].Value;
+
+                    bool replace = false;
+                    if (gnisEntry != null)
+                    {
+                        if (prev == "" && rest == "")
+                        {
+                            string[] replTitles =
+                            {
+                                "U.S. Geological Survey Geographic Names Information System: " + gnisEntry.Name,
+                                "USGS GNIS Feature Detail Report: " + gnisEntry.Name,
+                                "GNIS. Feature Detail Report for: " + gnisEntry.Name,
+                                "Feature Detail Report for: " + gnisEntry.Name,
+                                "GNIS Detail — " + gnisEntry.Name,
+                                "Geographic Names Information System, U.S. Geological Survey",
+                                "Geographic Names Information System, U.S. Geological Survey.",
+                                "Geographic Names Information System. United States Geological Survey",
+                                "Geographic Names Information System. United States Geological Survey.",
+                                "Geographic Names Information System (GNIS). United States Geological Survey (USGS)",
+                                "U.S. Geological Survey Geographic Names Information System",
+                                "geonames.usgs.gov",
+                                ""
+                            };
+
+                            string title = eli.Title.Trim();
+                            replace = replTitles.Any(t => title == t);
+                        }
+                    }
+
+                    if (replace)
+                    {
+                        if (article.DstWikiText == null)
+                            article.DstWikiText = article.SrcWikiText;
+                        article.DstWikiText = article.DstWikiText.Replace(eli.Text, templText);
+                    }
+
+                    sb.AppendLine($"|-");
+                    sb.AppendLine($"| {i}");
+                    sb.AppendLine($"| [[{article.Title}]]");
+                    sb.AppendLine($"| {(prev.Length != 0 ? "<small><code>{{color|gray|<nowiki>" + prev + "</nowiki>}}</code></small>" : "")}<small><code><nowiki>{eli.Text}</nowiki></code></small>{(rest.Length != 0 ? "<small><code>{{color|gray|<nowiki>" + rest + "</nowiki>}}</code></small>" : "")}");
+                    sb.AppendLine($"| <small><code><nowiki>{templText}</nowiki></code></small>");
+                    i++;
+                }
+                if (article.DstWikiText != null)
+                    db.Update(article);
             }
             db.CommitTransaction();
+            sb.AppendLine("|}");
+
+            File.WriteAllText("result.txt", sb.ToString());
 
             Console.WriteLine(" Done");
         }
@@ -419,15 +373,13 @@ namespace WikiTasks
         {
             Console.Write("Making replacements");
             var articles = db.Articles.
-                Where(a => a.Status == ProcessStatus.NotProcessed && a.DstRepl != null).
+                Where(a => a.Status == ProcessStatus.NotProcessed && a.DstWikiText != null).
                 OrderBy(a => a.Title).ToArray();
 
             foreach (var article in articles)
             {
-                string ReplWikiText =
-                    article.SrcWikiText.Replace(article.SrcRepl, article.DstRepl);
                 bool isEditSuccessful = EditPage(csrfToken, article.Timestamp,
-                    article.Title, "сайт закрыт", ReplWikiText);
+                    article.Title, "оформление", article.DstWikiText);
                 article.Status = isEditSuccessful ? ProcessStatus.Success : ProcessStatus.Failure;
                 db.Update(article);
                 Console.Write(isEditSuccessful ? '.' : 'x');
@@ -436,10 +388,36 @@ namespace WikiTasks
             Console.WriteLine(" Done");
         }
 
+        void LoadGNIS()
+        {
+            if (HaveTable("GNISEntries"))
+                return;
+            Console.Write("Loading GNIS...");
+            db.CreateTable<GNISEntry>();
+            string[] entries = File.ReadAllLines("AllNames_20181201.txt");
+            int lastId = -1;
+            db.BeginTransaction();
+            for (int i = 1; i < entries.Length; i++)
+            {
+                var se = entries[i].Split('|');
+                int id = int.Parse(se[0]);
+                if (id != lastId)
+                {
+                    lastId = id;
+                    db.Insert(new GNISEntry { Id = id, Name = se[1] });
+                }
+            }
+            db.CommitTransaction();
+
+            Console.WriteLine(" Done");
+        }
+
         Program()
         {
             wpApi = new MwApi("ru.wikipedia.org");
-            var ids = SearchArticles("insource:/space\\.kursknet\\.ru/ hastemplate:\"cite web\"");
+            LoadGNIS();
+            var ids = SearchArticles(
+                "insource:/\\[https?:\\/\\/geonames\\.usgs\\.gov\\/(pls\\/gnispublic|apex)\\/f\\?p=gnispq:3:[0-9]*::NO::P3_FID:([0-9]+)/");
             DownloadArticles(ids.ToArray());
             ProcessArticles();
             ObtainEditToken();
