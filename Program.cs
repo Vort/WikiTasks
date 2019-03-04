@@ -1,16 +1,10 @@
-﻿using Antlr4.Runtime;
-using LinqToDB;
+﻿using LinqToDB;
 using LinqToDB.Mapping;
 using System;
 using System.Collections.Generic;
-using System.Diagnostics;
-using System.Globalization;
 using System.IO;
 using System.Linq;
-using System.Text;
 using System.Text.RegularExpressions;
-using System.Threading;
-using System.Threading.Tasks;
 using System.Xml;
 
 namespace WikiTasks
@@ -21,15 +15,6 @@ namespace WikiTasks
         Success = 1,
         Failure = 2,
         Skipped = 3
-    }
-
-    class ELinkInvoke
-    {
-        public int StartPosition;
-        public int EndPosition;
-        public string Text;
-        public string Url;
-        public string Title;
     }
 
     [Table(Name = "Articles")]
@@ -47,27 +32,11 @@ namespace WikiTasks
         public string DstWikiText;
         [Column()]
         public ProcessStatus Status;
-
-
-        public List<string> Errors;
-        public List<ELinkInvoke> ElinkInvokes;
     };
-
-    [Table(Name = "GNISEntries")]
-    class GNISEntry
-    {
-        [PrimaryKey]
-        public int Id;
-        [Column()]
-        public string Name;
-    }
-
 
     class Db : LinqToDB.Data.DataConnection
     {
         public Db() : base("Db") { }
-
-        public ITable<GNISEntry> GNISEntries { get { return GetTable<GNISEntry>(); } }
 
         public ITable<Article> Articles { get { return GetTable<Article>(); } }
     }
@@ -175,136 +144,63 @@ namespace WikiTasks
 
         void ProcessArticles()
         {
-            int processed = 0;
-            int lexerErrors = 0;
-            int parserErrors = 0;
-
-            var articles = db.Articles.ToArray();
-            //var articles = db.Articles.Take(500).ToArray();
-            //var articles = db.Articles.Where(a => a.Title == "Мюра (водопады)").ToArray();
-
-            Console.Write("Parsing articles");
-            Stopwatch stopwatch = new Stopwatch();
-            stopwatch.Start();
-            Parallel.ForEach(articles, article =>
-            {
-                AntlrErrorListener ael = new AntlrErrorListener();
-                AntlrInputStream inputStream = new AntlrInputStream(article.SrcWikiText);
-                WikiLexer lexer = new WikiLexer(inputStream);
-                lexer.RemoveErrorListeners();
-                lexer.AddErrorListener(ael);
-                CommonTokenStream commonTokenStream = new CommonTokenStream(lexer);
-                WikiParser parser = new WikiParser(commonTokenStream);
-                parser.RemoveErrorListeners();
-                parser.AddErrorListener(ael);
-                WikiParser.InitContext initContext = parser.init();
-                WikiVisitor visitor = new WikiVisitor(article);
-                visitor.VisitInit(initContext);
-                article.Errors = ael.ErrorList;
-
-                Interlocked.Add(ref lexerErrors, ael.LexerErrors);
-                Interlocked.Add(ref parserErrors, ael.ParserErrors);
-
-                if (Interlocked.Increment(ref processed) % 100 == 0)
-                    Console.Write('.');
-            });
-            stopwatch.Stop();
-
-            Console.WriteLine(" Done");
-            Console.WriteLine(" Articles: " + articles.Count());
-            Console.WriteLine(" Parser errors: " + parserErrors);
-            Console.WriteLine(" Lexer errors: " + lexerErrors);
-            Console.WriteLine(" Parsing time: " + stopwatch.Elapsed.TotalSeconds + " sec");
-
-            List<string> errorLog = new List<string>();
-            foreach (Article article in articles)
-            {
-                if (article.Errors == null)
-                    continue;
-                if (article.Errors.Count == 0)
-                    continue;
-                errorLog.Add("Статья: " + article.Title);
-                errorLog.AddRange(article.Errors);
-            }
-            File.WriteAllLines("error_log.txt", errorLog.ToArray(), Encoding.UTF8);
-
-            Thread.CurrentThread.CurrentCulture = CultureInfo.InvariantCulture;
-
             Console.Write("Processing...");
 
-            var sb = new StringBuilder();
+            var articles = db.Articles.ToArray();
+            var dct = new Dictionary<string, int>();
 
-            int i = 1;
-            sb.AppendLine("{|class=\"wide\" style=\"table-layout: fixed;word-wrap:break-word\"");
-            sb.AppendLine("!width=\"28px\"|№");
-            sb.AppendLine("!width=\"20%\"|Статья");
-            sb.AppendLine("!width=\"50%\"|Ссылка");
-            sb.AppendLine("!width=\"30%\"|Шаблон");
+            string[] replTitles =
+            {
+                "{{книга |автор= |часть= |ссылка часть= |заглавие=Блакітная кніга Беларусі. |ответственный=Рэдкал.: Н. А. Дзiсько i iнш |место=Мн. |издательство=[[Белорусская энциклопедия имени Петруся Бровки|БелЭн]] |год=1994 |том= |страницы= |столбцы= |страниц=415}}{{ref-be}}",
+                "{{книга |автор= |часть= |ссылка часть= |заглавие=Блакітная кніга Беларусі. |ответственный=Рэдкал.: Н. А. Дзiсько i iнш |место=Мн. |издательство=[[Белорусская энциклопедия имени Петруся Бровки|БелЭн]] |год=1994 |том= |страницы= |столбцы= |страниц=415}} {{ref-be}}",
+                "{{книга |автор= |заглавие=Блакітная кніга Беларусі. |ответственный=Рэдкал.: Н. А. Дзiсько i iнш |место=Мн. |издательство=[[Белорусская энциклопедия имени Петруся Бровки|БелЭн]] |год=1994 |том= |страницы= |столбцы= |страниц=415}}{{ref-be}}",
+                "{{книга |автор= |заглавие=Блакітная кніга Беларусі. |ответственный=Рэдкал.: Н. А. Дзiсько i iнш |место=Мн. |издательство=[[Белорусская энциклопедия имени Петруся Бровки|БелЭн]] |год=1994 |страницы= |страниц=415}}{{ref-be}}",
+                "{{книга|заглавие=Блакiтная кнiга Беларусi: энцыкл. |ответственный=Рэдкал.: Н. А. Дзiсько i iнш. |место=Мн. |издательство= БелЭн| год=1994 |страниц=415}}{{ref-be}}",
+                "Блакiтная кнiга Беларусi: энцыкл. / Рэдкал.: Н. А. Дзiсько i iнш. — Мн.: БелЭн, 1994. — 415 с.",
+                "Блакітная кніга Беларусі: Энцыкл. / БелЭн; Рэдкал.: Н. А. Дзісько і інш. — Мн.: БелЭн, 1994.",
+                "Блакiтная кнiга Беларусi: Энцыкл. / БелЭн; Рэдкал.: Н. А. Дзiсько i iнш. — Мн.: БелЭн, 1994.",
+                "Блакітная кніга Беларусі: Энцыкл. / БелЭн; Рэдкал.: Н. А. Дзісько і інш. — Мн.: БелЭн, 1994",
+                "«Блакітная кніга Беларусі». — Мн.:БелЭн, 1994.",
+                "«Блакітная кніга Беларусі». — Мн.:БелЭн, 1994",
+                "Блакітная кніга Беларусі. — Мн.: БелЭн, 1994.",
+                "Блакiтная кнiга Беларусi. — Мн.: БелЭн, 1994.",
+                "Блакiтная кнiга Беларусi. — Мн.: БелЭн, 1994",
+                "Блакiтная кнiга Беларусi. — Мн.: БелЭн, 1994",
+                "Блакітная кніга Беларусі. — Мн.:БелЭн, 1994.",
+                "Блакiтная кнiга Беларусi. — Мн.:БелЭн, 1994.",
+                "Блакiтная кнiга Беларусi. — Мн.:БелЭн, 1994",
+            };
 
             db.BeginTransaction();
             foreach (var article in articles.OrderBy(a => a.Title))
             {
-                foreach (var eli in article.ElinkInvokes)
+                var matches = Regex.Matches(article.SrcWikiText,
+                    "[>*\\n] *([^>*\\n]*Блак[іi]тная кн[iі]га Беларус[iі][^<*\\n]*)[\\n<]");
+                if (matches.Count != 1)
+                    continue;
+                var m = matches[0];
+                var citation = m.Groups[1].Value;
+
+                if (replTitles.Any(t => citation == t))
                 {
-                    int gnisId = int.Parse(Regex.Match(eli.Url, "P3_FID:([0-9]+)").Groups[1].Value);
-
-                    GNISEntry gnisEntry = db.GNISEntries.FirstOrDefault(e => e.Id == gnisId);
-                    var templText = $"{{{{GNIS|{gnisId}|{gnisEntry.Name}}}}}";
-
-                    var prev = Regex.Match(
-                        article.SrcWikiText.Substring(0, eli.StartPosition), "[>*\n] *([^>*\n]+)$", RegexOptions.Singleline).Groups[1].Value.Trim();
-
-                    var rest = Regex.Match(
-                        article.SrcWikiText.Substring(eli.EndPosition), "([^\n<]+)?").Groups[1].Value;
-
-                    bool replace = false;
-                    if (gnisEntry != null)
-                    {
-                        if (prev == "" && rest == "")
-                        {
-                            string[] replTitles =
-                            {
-                                "U.S. Geological Survey Geographic Names Information System: " + gnisEntry.Name,
-                                "USGS GNIS Feature Detail Report: " + gnisEntry.Name,
-                                "GNIS. Feature Detail Report for: " + gnisEntry.Name,
-                                "Feature Detail Report for: " + gnisEntry.Name,
-                                "GNIS Detail — " + gnisEntry.Name,
-                                "Geographic Names Information System, U.S. Geological Survey",
-                                "Geographic Names Information System, U.S. Geological Survey.",
-                                "Geographic Names Information System. United States Geological Survey",
-                                "Geographic Names Information System. United States Geological Survey.",
-                                "Geographic Names Information System (GNIS). United States Geological Survey (USGS)",
-                                "U.S. Geological Survey Geographic Names Information System",
-                                "geonames.usgs.gov",
-                                ""
-                            };
-
-                            string title = eli.Title.Trim();
-                            replace = replTitles.Any(t => title == t);
-                        }
-                    }
-
-                    if (replace)
-                    {
-                        if (article.DstWikiText == null)
-                            article.DstWikiText = article.SrcWikiText;
-                        article.DstWikiText = article.DstWikiText.Replace(eli.Text, templText);
-                    }
-
-                    sb.AppendLine($"|-");
-                    sb.AppendLine($"| {i}");
-                    sb.AppendLine($"| [[{article.Title}]]");
-                    sb.AppendLine($"| {(prev.Length != 0 ? "<small><code>{{color|gray|<nowiki>" + prev + "</nowiki>}}</code></small>" : "")}<small><code><nowiki>{eli.Text}</nowiki></code></small>{(rest.Length != 0 ? "<small><code>{{color|gray|<nowiki>" + rest + "</nowiki>}}</code></small>" : "")}");
-                    sb.AppendLine($"| <small><code><nowiki>{templText}</nowiki></code></small>");
-                    i++;
-                }
-                if (article.DstWikiText != null)
+                    article.DstWikiText = article.SrcWikiText.Replace(
+                        citation, "{{Книга:БКБ}}");
+                    if (article.SrcWikiText == article.DstWikiText)
+                        throw new Exception();
                     db.Update(article);
+                }
+                else
+                {
+                    if (!dct.ContainsKey(citation))
+                        dct[citation] = 1;
+                    else
+                        dct[citation]++;
+                }
             }
             db.CommitTransaction();
-            sb.AppendLine("|}");
 
-            File.WriteAllText("result.txt", sb.ToString());
+            File.WriteAllLines("result.txt",
+                dct.OrderByDescending(kv => kv.Value).Select(kv => kv.Value + " : " + kv.Key).ToArray());
 
             Console.WriteLine(" Done");
         }
@@ -388,36 +284,11 @@ namespace WikiTasks
             Console.WriteLine(" Done");
         }
 
-        void LoadGNIS()
-        {
-            if (HaveTable("GNISEntries"))
-                return;
-            Console.Write("Loading GNIS...");
-            db.CreateTable<GNISEntry>();
-            string[] entries = File.ReadAllLines("AllNames_20181201.txt");
-            int lastId = -1;
-            db.BeginTransaction();
-            for (int i = 1; i < entries.Length; i++)
-            {
-                var se = entries[i].Split('|');
-                int id = int.Parse(se[0]);
-                if (id != lastId)
-                {
-                    lastId = id;
-                    db.Insert(new GNISEntry { Id = id, Name = se[1] });
-                }
-            }
-            db.CommitTransaction();
-
-            Console.WriteLine(" Done");
-        }
 
         Program()
         {
             wpApi = new MwApi("ru.wikipedia.org");
-            LoadGNIS();
-            var ids = SearchArticles(
-                "insource:/\\[https?:\\/\\/geonames\\.usgs\\.gov\\/(pls\\/gnispublic|apex)\\/f\\?p=gnispq:3:[0-9]*::NO::P3_FID:([0-9]+)/");
+            var ids = SearchArticles("insource:/Блак[іi]тная кн[iі]га Беларус[iі]/");
             DownloadArticles(ids.ToArray());
             ProcessArticles();
             ObtainEditToken();
