@@ -30,8 +30,10 @@ namespace WikiTasks
         public List<string> Errors;
         public Template Template;
 
-        public string TemplateNameNorm;
+        public string PreambleName;
+        public string PreambleNameNorm;
         public string TemplateName;
+        public string TemplateNameNorm;
         public string TitleName;
     };
 
@@ -152,6 +154,8 @@ namespace WikiTasks
 
         public string Name;
         public List<TemplateParam> Params;
+        public int StartPosition;
+        public int StopPosition;
     }
 
     class Program
@@ -260,6 +264,43 @@ namespace WikiTasks
             Console.WriteLine(" Done");
         }
 
+        string Normalize1(string name)
+        {
+            string normalized = name.Replace("\u0301", "");
+            normalized = normalized.Replace("&nbsp;", " ");
+            normalized = normalized.Replace("\u00A0", " ");
+            return normalized;
+        }
+
+        string Normalize2(string name)
+        {
+            string[] toReplace = { "водохранилище", "озеро", "пруд-накопитель", "пруд", "сардоба",
+                "горный парк", "река", "канал", "болото", "пролив", "водопады", "водопад", "ручей",
+                "ледник", "море", "минеральная вода", "залив", "бухта", "губа", "лагуна", "овраг" };
+
+            string normalized = Regex.Replace(name, "\\([^)]+\\)", "").Trim();
+            foreach (var replName in toReplace)
+            {
+                normalized = normalized.Replace(replName, "");
+                normalized = normalized.Replace(
+                    replName.First().ToString().ToUpper() + replName.Substring(1), "");
+            }
+            normalized = normalized.Trim();
+            return normalized;
+        }
+
+
+        string Normalize(string name)
+        {
+            return Normalize2(Normalize1(name));
+        }
+
+        string Colorize(string name)
+        {
+            return Regex.Replace(
+                name, "([^0-9а-яА-ЯёЁ —\\(\\)«»\\.\\-]+)", "{{color|crimson|$1}}");
+        }
+
         void ProcessArticles()
         {
             int processed = 0;
@@ -267,8 +308,8 @@ namespace WikiTasks
             int parserErrors = 0;
 
             var articles = db.Articles.ToArray();
-            //var articles = db.Articles.Take(5000).ToArray();
-            //var articles = db.Articles.Where(a => a.Title == "Мюра (водопады)").ToArray();
+            //var articles = db.Articles.Take(1000).ToArray();
+            //var articles = db.Articles.Where(a => a.Title == "Большой Сарышыганак").ToArray();
 
             Console.Write("Parsing articles");
             Stopwatch stopwatch = new Stopwatch();
@@ -326,23 +367,11 @@ namespace WikiTasks
 
             Console.Write("Processing...");
 
-            string[] toReplace = { "водохранилище", "озеро", "пруд-накопитель", "пруд", "сардоба",
-                "горный парк", "река", "канал", "болото", "пролив", "водопады", "водопад", "ручей",
-                "ледник", "море", "минеральная вода", "залив", "бухта", "губа", "лагуна", "овраг" };
-
-
             string[] blacklist = { "/", "{", ",", "(", "<" };
 
             foreach (Article article in articles)
             {
-                article.TitleName = Regex.Replace(article.Title, "\\([^)]+\\)", "").Trim();
-                foreach (var replName in toReplace)
-                {
-                    article.TitleName = article.TitleName.Replace(replName, "");
-                    article.TitleName = article.TitleName.Replace(
-                        replName.First().ToString().ToUpper() + replName.Substring(1), "");
-                }
-                article.TitleName = article.TitleName.Trim();
+                article.TitleName = Normalize(article.Title);
 
                 if (article.Template == null)
                     continue;
@@ -355,17 +384,21 @@ namespace WikiTasks
                 }
 
                 if (article.TemplateName != null)
+                    article.TemplateNameNorm = Normalize(article.TemplateName);
+
+                var match = Regex.Match(article.SrcWikiText.Substring(
+                    article.Template.StopPosition), "'''([^']+)'''");
+                if (match.Success)
                 {
-                    article.TemplateNameNorm = article.TemplateName;
-                    article.TemplateNameNorm = article.TemplateNameNorm.Replace("́", "");
-                    article.TemplateNameNorm = article.TemplateNameNorm.Replace("&nbsp;", " ");
-                    foreach (var replName in toReplace)
+                    article.PreambleName = match.Groups[1].Value;
+                    article.PreambleName = Regex.Replace(article.PreambleName, "^([^<]+).*", "$1");
+                    if (!article.PreambleName.Contains('[') && !(article.PreambleName.Length == 1))
                     {
-                        article.TemplateNameNorm = article.TemplateNameNorm.Replace(replName, "");
-                        article.TemplateNameNorm = article.TemplateNameNorm.Replace(
-                            replName.First().ToString().ToUpper() + replName.Substring(1), "");
+                        article.PreambleName = Normalize1(article.PreambleName);
+                        article.PreambleNameNorm = Normalize2(article.PreambleName);
                     }
-                    article.TemplateNameNorm = article.TemplateNameNorm.Trim();
+                    else
+                        article.PreambleName = null;
                 }
             }
 
@@ -375,17 +408,24 @@ namespace WikiTasks
             sb.AppendLine("!№");
             sb.AppendLine("!Статья");
             sb.AppendLine("!Название в карточке");
+            sb.AppendLine("!Название в преамбуле");
             int i = 1;
             foreach (Article article in articles.
-                Where(a => a.TemplateNameNorm != null &&
-                a.TemplateNameNorm != a.TitleName).OrderBy(a => a.Title))
+                Where(a => a.TemplateNameNorm != null && a.PreambleName != null &&
+                (a.TitleName != a.TemplateNameNorm || a.TitleName != a.PreambleNameNorm)).OrderBy(a => a.Title))
             {
-                var colorizedTemplateName = Regex.Replace(
-                    article.TemplateName, "([a-zA-Z]+)", "{{color|crimson|$1}}");
+                string templateOut = "{{color|gray|— // —}}";
+                string preambleOut = "{{color|gray|— // —}}";
+                if (article.TitleName != article.TemplateNameNorm)
+                    templateOut = Colorize(article.TemplateName);
+                if (article.TitleName != article.PreambleNameNorm)
+                    preambleOut = Colorize(article.PreambleName);
+
                 sb.AppendLine("|-");
                 sb.AppendLine($"| {i}");
                 sb.AppendLine($"| [[{article.Title}]]");
-                sb.AppendLine($"| {colorizedTemplateName}");
+                sb.AppendLine($"| {templateOut}");
+                sb.AppendLine($"| {preambleOut}");
                 i++;
             }
             sb.AppendLine("|}");

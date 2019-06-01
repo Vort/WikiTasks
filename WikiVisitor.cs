@@ -35,6 +35,8 @@ namespace WikiTasks
         {
             var template = new Template();
             template.Name = templContext.children[1].GetText().Trim();
+            template.StartPosition = templContext.start.StartIndex;
+            template.StopPosition = templContext.stop.StopIndex + 1;
             var prevParam = new TemplateParam();
             bool v1;
             string v2;
