@@ -274,9 +274,12 @@ namespace WikiTasks
 
         string Normalize2(string name)
         {
-            string[] toReplace = { "водохранилище", "озеро", "пруд-накопитель", "пруд", "сардоба",
-                "горный парк", "река", "канал", "болото", "пролив", "водопады", "водопад", "ручей",
-                "ледник", "море", "минеральная вода", "залив", "бухта", "губа", "лагуна", "овраг" };
+            string[] toReplace = { "хребет", "гора", "горы", "полуостров", "острова", "остров",
+                "пещеры", "пещера", "мыс", "долина", "архипелаг", "кратер", "скалы", "полонина",
+                "вулкан", "кальдера", "перевал", "атоллы", "атолл", "жёлоб", "пик", "каньон",
+                "возвышенность", "пустыня", "урочище", "плато", "горное плато", "группа островов",
+                "поднятие", "ущелье", "коса", "балка", "лес", "скала", "рифы", "риф", "равнина",
+                "пляж", "сопка", "цепь"};
 
             string normalized = Regex.Replace(name, "\\([^)]+\\)", "").Trim();
             foreach (var replName in toReplace)
@@ -298,7 +301,7 @@ namespace WikiTasks
         string Colorize(string name)
         {
             return Regex.Replace(
-                name, "([^0-9а-яА-ЯёЁ —\\(\\)«»\\.\\-]+)", "{{color|crimson|$1}}");
+                name, "([^0-9а-яА-ЯёЁ ’—\\(\\)«»\\.\\-]+)", "{{color|crimson|<nowiki>$1</nowiki>}}");
         }
 
         void ProcessArticles()
@@ -308,7 +311,7 @@ namespace WikiTasks
             int parserErrors = 0;
 
             var articles = db.Articles.ToArray();
-            //var articles = db.Articles.Take(1000).ToArray();
+            //var articles = db.Articles.Take(4000).ToArray();
             //var articles = db.Articles.Where(a => a.Title == "Большой Сарышыганак").ToArray();
 
             Console.Write("Parsing articles");
@@ -327,10 +330,13 @@ namespace WikiTasks
                 parser.AddErrorListener(ael);
                 WikiParser.InitContext initContext = parser.init();
                 WikiVisitor visitor = new WikiVisitor(article,
-                    new string[] { "Водохранилище", "Озеро", "Пруд", "Река", "Канал",
-                    "Море", "Залив", "Пролив", "Группа озёр", "Водопад", "Морское течение",
-                    "Ледник", "Болото", "Речной порог", "Водный источник", "Солончак",
-                    "Родник", "Заповедная зона" }, null);
+                    new string[] { "Вершина", "Хребет", "Материк", "Вулкан", "Остров",
+                    "Полуостров", "Группа островов", "Лес", "Равнина", "Массив", "Перевал",
+                    "Коса", "Мыс", "Скала", "Возвышенность", "Горная система", "Кратер",
+                    "Долина", "Пещера", "Архипелаг", "Плоскогорье", "Впадина", "Пустыня",
+                    "Плато", "Атолл", "Побережье", "Нагорье", "Подводная котловина",
+                    "Подводная впадина", "Экологический регион", "Пляж", "Подводный хребет",
+                    "Урочище", /*"Заповедная зона"*/}, null);
                 visitor.VisitInit(initContext);
                 article.Errors = ael.ErrorList;
 
@@ -404,11 +410,11 @@ namespace WikiTasks
 
             var sb = new StringBuilder();
 
-            sb.AppendLine("{|class=\"wikitable sortable\"");
-            sb.AppendLine("!№");
+            sb.AppendLine("{|class=\"wide sortable\" style=\"table-layout: fixed;word-wrap:break-word\"");
+            sb.AppendLine("!width=\"12em\"|№");
             sb.AppendLine("!Статья");
-            sb.AppendLine("!Название в карточке");
-            sb.AppendLine("!Название в преамбуле");
+            sb.AppendLine("!width=\"30%\"|Название в карточке");
+            sb.AppendLine("!width=\"30%\"|Название в преамбуле");
             int i = 1;
             foreach (Article article in articles.
                 Where(a => a.TemplateNameNorm != null && a.PreambleName != null &&
@@ -429,8 +435,6 @@ namespace WikiTasks
                 i++;
             }
             sb.AppendLine("|}");
-            sb.AppendLine();
-            sb.AppendLine("[[Категория:Проект:Водные объекты/Текущие события]]");
 
             File.WriteAllText("result.txt", sb.ToString());
             Console.WriteLine(" Done");
@@ -489,7 +493,7 @@ namespace WikiTasks
         Program()
         {
             wpApi = new MwApi("ru.wikipedia.org");
-            var ids = ScanCategory("Категория:Водные объекты по алфавиту");
+            var ids = ScanCategory("Категория:Природные географические объекты по алфавиту");
             DownloadArticles(ids);
             ProcessArticles();
         }
