@@ -236,6 +236,8 @@ namespace WikiTasks
                 changed.ToDictionary(id => id, id => false)).ToDictionary(
                 kv => kv.Key, kv => kv.Value);
 
+            if (deleted.Length > 100)
+                throw new Exception("Too many articles deleted. Looks like a bug");
             db.Articles.Delete(a => deleted.Contains(a.PageId));
 
             Console.Write("Downloading articles");
@@ -485,6 +487,9 @@ namespace WikiTasks
                 continueQuery = continueQueryAttr == null ? null : continueQueryAttr.Value;
                 continueGcm = continueGcmAttr == null ? null : continueGcmAttr.Value;
                 continueRv = continueRvAttr == null ? null : continueRvAttr.Value;
+
+                if (ids.Count == 0)
+                    throw new Exception("Category is empty. Looks like a bug");
             }
             Console.WriteLine(" Done");
             return ids;
@@ -493,6 +498,7 @@ namespace WikiTasks
         Program()
         {
             wpApi = new MwApi("ru.wikipedia.org");
+
             var ids = ScanCategory("Категория:Природные географические объекты по алфавиту");
             DownloadArticles(ids);
             ProcessArticles();
