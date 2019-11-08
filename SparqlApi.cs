@@ -10,6 +10,7 @@ namespace WikiTasks
         public static Dictionary<string, string>[] Query(string sparql)
         {
             WebClient wc = new WebClient();
+            wc.Headers["User-Agent"] = "WikiTasks";
             wc.Headers["Accept-Encoding"] = "gzip";
             wc.Headers["Content-Type"] = "application/x-www-form-urlencoded";
             wc.Headers["Accept"] = "application/sparql-results+json";
