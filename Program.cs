@@ -151,7 +151,7 @@ namespace WikiTasks
             string catNotChecked = "Категория:Википедия:Статьи о реках, требующие проверки";
             string catToImprove = "Категория:Википедия:Статьи для срочного улучшения";
             string catNoRefs = "Категория:Википедия:Статьи без сносок";
-            string catSmall400 = "Категория:ПРО:ВО:Размер статьи: менее 400 символов";
+            string catSmall500 = "Категория:ПРО:ВО:Размер статьи: менее 500 символов";
             string catSmall600 = "Категория:ПРО:ВО:Размер статьи: менее 600 символов";
             string catNoSourceCoords50 = "Категория:Карточка реки: заполнить: Координаты истока реки свыше пятидесяти км";
             string catNoSourceCoords100 = "Категория:Карточка реки: заполнить: Координаты истока реки свыше ста км";
@@ -162,7 +162,7 @@ namespace WikiTasks
             string catNoMouthCoords50 = "Категория:Карточка реки: заполнить: Координаты устья реки свыше пятидесяти км";
             string catNoGeoCoords = "Категория:Википедия:Водные объекты без указанных географических координат";
             string tmplNoRs = "Шаблон:Сортировка: статьи без источников";
-            var catSmallList = new string[] { catSmall400, catSmall600 };
+            var catSmallList = new string[] { catSmall500, catSmall600 };
             var catNoSourceCoordsList = new string[] {
                 catNoSourceCoords50, catNoSourceCoords100, catNoSourceCoords200, catNoSourceCoords300 };
             var catNoMouthCoordsList = new string[] {
