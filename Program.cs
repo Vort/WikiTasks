@@ -27,7 +27,7 @@ namespace WikiTasks
         {
             var idList = new List<int>();
 
-            string lntfrom = "";
+            string lntfrom = null;
             Console.Write("Searching for lint errors...");
             for (;;)
             {
