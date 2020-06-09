@@ -2,6 +2,7 @@
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Net;
 using System.Net.Http;
 using System.Security.Cryptography;
 using System.Text;
@@ -44,6 +45,11 @@ namespace WikiTasks
         readonly string apiUrl;
         const string appName = "WikiTasks";
 
+        static MwApi()
+        {
+            ServicePointManager.SecurityProtocol = SecurityProtocolType.Tls12;
+        }
+
         public MwApi(string site)
         {
             random = new Random();
@@ -74,6 +80,8 @@ namespace WikiTasks
                     FileInfo valueFileInfo = value as FileInfo;
                     if (key == null)
                         throw new Exception();
+                    if (value == null)
+                        continue;
                     if (valueString == null && valueFileInfo == null)
                         throw new Exception();
                     if (valueString != null)

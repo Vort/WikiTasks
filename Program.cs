@@ -125,7 +125,7 @@ namespace WikiTasks
             var idList = new List<int>();
 
             Console.Write("Searching articles");
-            string sroffset = "";
+            string sroffset = null;
             for (;;)
             {
                 string xml = wpApi.PostRequest(
