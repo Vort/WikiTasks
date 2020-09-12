@@ -1,117 +1,119 @@
-﻿using LinqToDB;
-using LinqToDB.Mapping;
-using System;
+﻿using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
+using System.Text.RegularExpressions;
 using System.Xml;
+using Newtonsoft.Json.Linq;
+using System.IO.Compression;
+using System.Text;
 
 namespace WikiTasks
 {
-    [Table(Name = "Errors")]
-    class Error
-    {
-        [PrimaryKey]
-        public int LintId;
-        [Column()]
-        public int PageId;
-        [Column()]
-        public string PageTitle;
-        [Column()]
-        public string TemplateName;
-        [Column()]
-        public string ParamName;
-    };
-
-    class Db : LinqToDB.Data.DataConnection
-    {
-        public Db() : base("Db") { }
-
-        public ITable<Error> Errors { get { return GetTable<Error>(); } }
-    }
- 
     class Program
     {
         MwApi wpApi;
-        static Db db;
 
-        List<List<T>> SplitToChunks<T>(T[] elements, int chunkSize)
+        Regex cyrLatRegex;
+
+        string DownloadPage(string title)
         {
-            int chunkCount = (elements.Length + chunkSize - 1) / chunkSize;
+            string xml = wpApi.PostRequest(
+                "action", "query",
+                "prop", "revisions",
+                "rvprop", "content",
+                "format", "xml",
+                "titles", title);
 
-            var chunks = new List<List<T>>();
-            for (int i = 0; i < chunkCount; i++)
+            XmlDocument doc = new XmlDocument();
+            doc.LoadXml(xml);
+
+            foreach (XmlNode pageNode in doc.SelectNodes("/api/query/pages/page"))
             {
-                var chunk = new List<T>();
-                for (int j = 0; j < chunkSize; j++)
-                {
-                    int k = i * chunkSize + j;
-                    if (k >= elements.Length)
-                        break;
-                    chunk.Add(elements[k]);
-                }
-                chunks.Add(chunk);
+                if (pageNode.Attributes["missing"] != null)
+                    continue;
+                return pageNode.SelectSingleNode("revisions/rev").InnerText;
             }
 
-            return chunks;
+            throw new Exception();
         }
 
-        static bool HaveTable(string name)
+        List<string> GetExceptions(string wikitext)
         {
-            return db.DataProvider.GetSchemaProvider().
-                GetSchema(db).Tables.Any(t => t.TableName == name);
+            var exceptions = new List<string>();
+            var matches = Regex.Matches(wikitext, " *\\|\\| *\\[\\[([^\\]]+)]] *\\n");
+            foreach (Match match in matches)
+                exceptions.Add(match.Groups[1].Value.Replace('_', ' '));
+            return exceptions;
         }
 
-        void GetLintErrors(string errorCategory)
+        Dictionary<int, string> LoadNamespaces()
         {
-            string lntfrom = "";
+            var o = JObject.Parse(File.ReadAllText("ruwiki-siteinfo-namespaces.json"));
+            return o["query"]["namespaces"].ToDictionary(
+                n => (int)((JProperty)n).Value["id"],
+                n => (string)((JProperty)n).Value["*"]);
+        }
 
-            if (!HaveTable("Errors"))
-                db.CreateTable<Error>();
-            else
-                lntfrom = (db.Errors.OrderByDescending(e => e.LintId).First().LintId + 1).ToString();
+        List<string> GetCyrLat(Dictionary<int, string> namespaces, string filename)
+        {
+            var cyrLat = new List<string>();
 
-            Console.Write("Searching for lint errors...");
+            GZipStream gzs = new GZipStream(
+                File.OpenRead(filename), CompressionMode.Decompress);
+
+            var sr = new StreamReader(gzs);
+            sr.ReadLine(); // header
+
             for (;;)
             {
-                string continueParam = "";
-                string xml = wpApi.PostRequest(
-                    "action", "query",
-                    "list", "linterrors",
-                    "format", "xml",
-                    "lntcategories", errorCategory,
-                    "lntlimit", "5000",
-                    "lntnamespace", "0",
-                    "lntfrom", lntfrom,
-                    "continue", continueParam);
-                Console.Write('.');
-
-                XmlDocument doc = new XmlDocument();
-                doc.LoadXml(xml);
-
-                db.BeginTransaction();
-                foreach (XmlNode vNode in doc.SelectNodes("/api/query/linterrors/_v"))
-                {
-                    var err = new Error();
-                    err.LintId = int.Parse(vNode.Attributes["lintId"].Value);
-                    err.PageId = int.Parse(vNode.Attributes["pageid"].Value);
-                    err.PageTitle = vNode.Attributes["title"].Value;
-                    var tNode = vNode.SelectSingleNode("templateInfo");
-                    var pNode = vNode.SelectSingleNode("params");
-                    var templateName = tNode.Attributes["name"];
-                    var paramName = pNode.Attributes["name"];
-                    err.TemplateName = templateName != null ? templateName.Value : "";
-                    err.ParamName = paramName != null ? paramName.Value : "";
-                    db.Insert(err);
-                }
-                db.CommitTransaction();
-
-                XmlNode contNode = doc.SelectSingleNode("/api/continue");
-                if (contNode == null)
+                var line = sr.ReadLine();
+                if (line == null)
                     break;
-                lntfrom = contNode.Attributes["lntfrom"].InnerText;
-                continueParam = contNode.Attributes["continue"].InnerText;
+                var spl = line.Split('\t');
+
+                int ns = int.Parse(spl[0]);
+
+                switch (ns)
+                {
+                    case 1:
+                    case 2:
+                    case 3:
+                    case 4:
+                    case 5:
+                    case 7:
+                    case 11:
+                    case 106:
+                    case 107:
+                        continue;
+                }
+
+                string name = spl[1].Replace('_', ' ');
+                if (cyrLatRegex.IsMatch(name))
+                {
+                    if (ns == 0)
+                        cyrLat.Add(name);
+                    else
+                        cyrLat.Add($":{namespaces[ns]}:{name}");
+                }
             }
-            Console.WriteLine(" Done");
+            return cyrLat;
+        }
+
+        void ProduceResultFile(List<string> cyrlat, string fileDate)
+        {
+            var sb = new StringBuilder();
+            sb.AppendLine($"Данные на {fileDate}.");
+            sb.AppendLine();
+            sb.AppendLine("{| class=\"sortable\"");
+            sb.AppendLine("! Название || Ссылка");
+            foreach (var cl in cyrlat)
+            {
+                sb.AppendLine("|-");
+                sb.AppendLine($"| [[{cl}|{{{{кирлат|{cl}}}}}]] || [[{cl}]]");
+            }
+            sb.AppendLine("|}");
+            File.WriteAllText("result.txt", sb.ToString());
         }
 
 
@@ -119,14 +121,26 @@ namespace WikiTasks
         {
             wpApi = new MwApi("ru.wikipedia.org");
 
-            GetLintErrors("missing-end-tag");
+            string cyr = "[а-яА-ЯёЁіІїЇ]";
+            string lat = "[a-zA-Z]";
+            cyrLatRegex = new Regex($"{cyr}+{lat}+|{lat}+{cyr}+");
+
+            var namespaces = LoadNamespaces();
+
+            var filename = Directory.EnumerateFiles(".", "*all-titles.gz").OrderBy(n => n).Last();
+            string fileDate = Regex.Replace(filename,
+                ".*(\\d{4})(\\d{2})(\\d{2}).*",
+                "{{date|$3|$2|$1|4}}");
+            var cyrlat = GetCyrLat(namespaces, filename);
+            var exceptions = GetExceptions(
+                DownloadPage("Википедия:Кирлат/Проверенные"));
+            cyrlat = cyrlat.Except(exceptions).OrderBy(x => x).ToList();
+            ProduceResultFile(cyrlat, fileDate);
         }
 
         static void Main(string[] args)
         {
-            db = new Db();
             new Program();
-            db.Dispose();
         }
     }
 }
