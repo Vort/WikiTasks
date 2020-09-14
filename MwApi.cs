@@ -76,17 +76,20 @@ namespace WikiTasks
                 {
                     string key = postParameters[i * 2] as string;
                     object value = postParameters[i * 2 + 1];
+                    int? valueInt = value as int?;
                     string valueString = value as string;
                     FileInfo valueFileInfo = value as FileInfo;
                     if (key == null)
                         throw new Exception();
                     if (value == null)
                         continue;
-                    if (valueString == null && valueFileInfo == null)
+                    if (valueString == null && valueInt == null && valueFileInfo == null)
                         throw new Exception();
                     if (valueString != null)
-                        postData.Add(new StringContent(value as string), key);
-                    if (valueFileInfo != null)
+                        postData.Add(new StringContent(valueString), key);
+                    else if (valueInt != null)
+                        postData.Add(new StringContent(valueInt.ToString()), key);
+                    else if (valueFileInfo != null)
                         postData.Add(new ByteArrayContent(valueFileInfo.Data), key, valueFileInfo.Name);
                 }
                 postData.Add(new StringContent("1"), "maxlag");
@@ -136,8 +139,8 @@ namespace WikiTasks
         public string GetToken(string type)
         {
             string xml = PostRequest(
-                "action", "query",
                 "format", "xml",
+                "action", "query",
                 "meta", "tokens",
                 "type", type);
 

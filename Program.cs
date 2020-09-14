@@ -1,11 +1,8 @@
 ﻿using System;
 using System.Collections.Generic;
-using System.IO;
 using System.Linq;
 using System.Text.RegularExpressions;
 using System.Xml;
-using Newtonsoft.Json.Linq;
-using System.IO.Compression;
 using System.Text;
 
 namespace WikiTasks
@@ -13,7 +10,7 @@ namespace WikiTasks
     class Program
     {
         MwApi wpApi;
-
+        
         Regex cyrLatRegex;
 
         string DownloadPage(string title)
@@ -35,10 +32,42 @@ namespace WikiTasks
                 return pageNode.SelectSingleNode("revisions/rev").InnerText;
             }
 
-            throw new Exception();
+            throw new Exception($"Page '{title}' not found.");
         }
 
-        List<string> GetExceptions(string wikitext)
+        string ObtainEditToken()
+        {
+            Console.Write("Authenticating...");
+            string csrfToken = wpApi.GetToken("csrf");
+            if (csrfToken == null)
+            {
+                Console.WriteLine(" Failed");
+                throw new Exception();
+            }
+            Console.WriteLine(" Done");
+            return csrfToken;
+        }
+
+        bool EditPage(string csrfToken, string title, string summary, string text)
+        {
+            string xml = wpApi.PostRequest(
+                "format", "xml",
+                "action", "edit",
+                "bot", "true",
+                "title", title,
+                "summary", summary,
+                "text", text,
+                "token", csrfToken);
+
+            XmlDocument doc = new XmlDocument();
+            doc.LoadXml(xml);
+
+            if (doc.SelectNodes("/api/error").Count == 1)
+                return false;
+            return doc.SelectSingleNode("/api/edit").Attributes["result"].InnerText == "Success";
+        }
+
+        List<string> ParseTable(string wikitext)
         {
             var exceptions = new List<string>();
             var matches = Regex.Matches(wikitext, " *\\|\\| *\\[\\[([^\\]]+)]] *\\n");
@@ -47,63 +76,13 @@ namespace WikiTasks
             return exceptions;
         }
 
-        Dictionary<int, string> LoadNamespaces()
+        string ProduceResultTable(List<string> cyrlat)
         {
-            var o = JObject.Parse(File.ReadAllText("ruwiki-siteinfo-namespaces.json"));
-            return o["query"]["namespaces"].ToDictionary(
-                n => (int)((JProperty)n).Value["id"],
-                n => (string)((JProperty)n).Value["*"]);
-        }
+            var date = DateTime.UtcNow.ToString("{{\\da\\te|dd|MM|yyyy|4}}");
 
-        List<string> GetCyrLat(Dictionary<int, string> namespaces, string filename)
-        {
-            var cyrLat = new List<string>();
-
-            GZipStream gzs = new GZipStream(
-                File.OpenRead(filename), CompressionMode.Decompress);
-
-            var sr = new StreamReader(gzs);
-            sr.ReadLine(); // header
-
-            for (;;)
-            {
-                var line = sr.ReadLine();
-                if (line == null)
-                    break;
-                var spl = line.Split('\t');
-
-                int ns = int.Parse(spl[0]);
-
-                switch (ns)
-                {
-                    case 1:
-                    case 2:
-                    case 3:
-                    case 4:
-                    case 5:
-                    case 7:
-                    case 11:
-                    case 106:
-                    case 107:
-                        continue;
-                }
-
-                string name = spl[1].Replace('_', ' ');
-                if (cyrLatRegex.IsMatch(name))
-                {
-                    if (ns == 0)
-                        cyrLat.Add(name);
-                    else
-                        cyrLat.Add($":{namespaces[ns]}:{name}");
-                }
-            }
-            return cyrLat;
-        }
-
-        void ProduceResultFile(List<string> cyrlat, string fileDate)
-        {
             var sb = new StringBuilder();
-            sb.AppendLine($"Данные на {fileDate}.");
+            sb.AppendLine();
+            sb.AppendLine($"Данные на {date}.");
             sb.AppendLine();
             sb.AppendLine("{| class=\"sortable\"");
             sb.AppendLine("! Название || Ссылка");
@@ -113,29 +92,113 @@ namespace WikiTasks
                 sb.AppendLine($"| [[{cl}|{{{{кирлат|{cl}}}}}]] || [[{cl}]]");
             }
             sb.AppendLine("|}");
-            File.WriteAllText("result.txt", sb.ToString());
+            return sb.ToString();
         }
 
+        void GetCyrLat(int ns, List<string> cyrlat)
+        {
+            string apcontinue = null;
+            string continueParam = null;
+            for (;;)
+            {
+                string xml = wpApi.PostRequest(
+                    "format", "xml",
+                    "action", "query",
+                    "list", "allpages",
+                    "apnamespace", ns,
+                    "aplimit", 5000,
+                    "apcontinue", apcontinue,
+                    "continue", continueParam);
+                Console.Write('.');
+
+                XmlDocument doc = new XmlDocument();
+                doc.LoadXml(xml);
+
+                var errorNode = doc.SelectSingleNode("/api/error");
+                if (errorNode != null)
+                    throw new Exception(errorNode.OuterXml);
+
+                foreach (XmlNode pNode in doc.SelectNodes("/api/query/allpages/p"))
+                {
+                    string title = pNode.Attributes["title"].Value;
+                    if (cyrLatRegex.IsMatch(title))
+                    {
+                        if (ns == 0)
+                            cyrlat.Add(title);
+                        else
+                            cyrlat.Add($":{title}");
+                    }
+                }
+
+                XmlNode contNode = doc.SelectSingleNode("/api/continue");
+                if (contNode == null)
+                    break;
+                apcontinue = contNode.Attributes["apcontinue"].Value;
+                continueParam = contNode.Attributes["continue"].Value;
+            }
+        }
 
         Program()
         {
             wpApi = new MwApi("ru.wikipedia.org");
 
-            string cyr = "[а-яА-ЯёЁіІїЇ]";
-            string lat = "[a-zA-Z]";
-            cyrLatRegex = new Regex($"{cyr}+{lat}+|{lat}+{cyr}+");
+            string csrfToken = ObtainEditToken();
 
-            var namespaces = LoadNamespaces();
+            string cyr = "[Ѐ-Яа-џ]";
+            string lat = "[A-Za-zÀ-ÖØ-Þß-öù-ÿ]";
+            cyrLatRegex = new Regex($"{cyr}{lat}|{lat}{cyr}");
 
-            var filename = Directory.EnumerateFiles(".", "*all-titles.gz").OrderBy(n => n).Last();
-            string fileDate = Regex.Replace(filename,
-                ".*(\\d{4})(\\d{2})(\\d{2}).*",
-                "{{date|$3|$2|$1|4}}");
-            var cyrlat = GetCyrLat(namespaces, filename);
-            var exceptions = GetExceptions(
-                DownloadPage("Википедия:Кирлат/Проверенные"));
+            var cyrlat = new List<string>();
+
+            Console.Write("Scanning page titles");
+            foreach (int ns in new int[] {
+                0,   // (Основное)
+                6,   // Файл
+                10,  // Шаблон
+                14,  // Категория
+                100, // Портал
+                102, // Инкубатор
+                104, // Проект
+                828, // Модуль
+                2300 // Гаджет
+            })
+            {
+                GetCyrLat(ns, cyrlat);
+            }
+            Console.WriteLine(" Done");
+
+            string exceptionsTableName = "Википедия:Кирлат/Проверенные";
+            string resultTableName = "Википедия:Кирлат/Подозрительные";
+
+            Console.Write("Downloading exceptions...");
+            var exceptions = ParseTable(DownloadPage(exceptionsTableName));
+            Console.WriteLine(" Done");
             cyrlat = cyrlat.Except(exceptions).OrderBy(x => x).ToList();
-            ProduceResultFile(cyrlat, fileDate);
+
+            Console.Write("Downloading old table...");
+            var wikitextOld = DownloadPage(resultTableName);
+            var cyrlatOld = ParseTable(wikitextOld);
+            Console.WriteLine(" Done");
+
+            if (cyrlatOld.Except(cyrlat).Any())
+            {
+                string marker = "<!-- Маркер вставки. Не трогайте эту строку. -->";
+                int markerIndex = wikitextOld.IndexOf(marker);
+                if (markerIndex == -1)
+                {
+                    Console.WriteLine("Insertion marker not found!");
+                    return;
+                }
+                int insertIndex = markerIndex + marker.Length;
+                string newWikitext = 
+                    wikitextOld.Substring(0, insertIndex) +
+                    ProduceResultTable(cyrlat);
+                Console.Write("Updating table...");
+                var r = EditPage(csrfToken, resultTableName, "обновление данных", newWikitext);
+                Console.WriteLine(r ? " Done" : " Failed");
+            }
+            else
+                Console.WriteLine("No changes are needed.");
         }
 
         static void Main(string[] args)
