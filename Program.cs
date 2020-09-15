@@ -177,10 +177,10 @@ namespace WikiTasks
 
             Console.Write("Downloading old table...");
             var wikitextOld = DownloadPage(resultTableName);
-            var cyrlatOld = ParseTable(wikitextOld);
+            var cyrlatOld = ParseTable(wikitextOld).OrderBy(x => x).ToList();
             Console.WriteLine(" Done");
 
-            if (cyrlatOld.Except(cyrlat).Any())
+            if (!cyrlat.SequenceEqual(cyrlatOld))
             {
                 string marker = "<!-- Маркер вставки. Не трогайте эту строку. -->";
                 int markerIndex = wikitextOld.IndexOf(marker);
