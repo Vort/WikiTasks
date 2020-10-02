@@ -10,7 +10,7 @@ namespace WikiTasks
     class Program
     {
         MwApi wpApi;
-        
+
         Regex cyrLatRegex;
 
         string DownloadPage(string title)
@@ -144,8 +144,8 @@ namespace WikiTasks
 
             string csrfToken = ObtainEditToken();
 
-            string cyr = "[Ѐ-Яа-џ]";
-            string lat = "[A-Za-zÀ-ÖØ-Þß-öù-ÿ]";
+            string cyr = "[Ѐ-҄҇-ԯᲀ-ᲈᴫᵸⷠ-ⷿꙀ-ꚟ︮-︯]";
+            string lat = "[A-Za-zªºÀ-ÖØ-öø-ʸˠ-ˤᴀ-ᴥᴬ-ᵜᵢ-ᵥᵫ-ᵷᵹ-ᶾḀ-ỿⁱⁿₐ-ₜK-ÅℲⅎⅠ-ↈⱠ-ⱿꜢ-ꞇꞋ-ꞿꟂ-ꟊꟵ-ꟿꬰ-ꭚꭜ-ꭤꭦ-ꭩﬀ-ﬆＡ-Ｚａ-ｚ]";
             cyrLatRegex = new Regex($"{cyr}{lat}|{lat}{cyr}");
 
             var cyrlat = new List<string>();
