@@ -25,11 +25,17 @@ namespace WikiTasks
 
         public static string GZipUnpack(byte[] data)
         {
-            GZipStream gzs = new GZipStream(
-                new MemoryStream(data), CompressionMode.Decompress);
-            MemoryStream ms = new MemoryStream();
-            gzs.CopyTo(ms);
-            return Encoding.UTF8.GetString(ms.ToArray());
+            using (var msi = new MemoryStream(data))
+            {
+                using (var gzs = new GZipStream(msi, CompressionMode.Decompress))
+                {
+                    using (var mso = new MemoryStream())
+                    {
+                        gzs.CopyTo(mso);
+                        return Encoding.UTF8.GetString(mso.ToArray());
+                    }
+                }
+            }
         }
     }
 }
