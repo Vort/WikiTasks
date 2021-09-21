@@ -276,20 +276,21 @@ namespace WikiTasks
 
         string Normalize2(string name)
         {
+            /*
             string[] toReplace = { "хребет", "гора", "горы", "полуостров", "острова", "остров",
                 "пещеры", "пещера", "мыс", "долина", "архипелаг", "кратер", "скалы", "полонина",
                 "вулкан", "кальдера", "перевал", "атоллы", "атолл", "жёлоб", "пик", "каньон",
                 "возвышенность", "пустыня", "урочище", "плато", "горное плато", "группа островов",
                 "поднятие", "ущелье", "коса", "балка", "лес", "скала", "рифы", "риф", "равнина",
                 "пляж", "сопка", "цепь"};
-
+            */
             string normalized = Regex.Replace(name, "\\([^)]+\\)", "").Trim();
-            foreach (var replName in toReplace)
+            /*foreach (var replName in toReplace)
             {
                 normalized = normalized.Replace(replName, "");
                 normalized = normalized.Replace(
                     replName.First().ToString().ToUpper() + replName.Substring(1), "");
-            }
+            }*/
             normalized = normalized.Trim();
             return normalized;
         }
@@ -312,9 +313,9 @@ namespace WikiTasks
             int lexerErrors = 0;
             int parserErrors = 0;
 
-            var articles = db.Articles.ToArray();
-            //var articles = db.Articles.Take(4000).ToArray();
-            //var articles = db.Articles.Where(a => a.Title == "Большой Сарышыганак").ToArray();
+            //var articles = db.Articles.ToArray();
+            var articles = db.Articles.Take(10000).ToArray();
+            //var articles = db.Articles.Take(1000).Where(a => a.Title == "Мюнхен").ToArray();
 
             Console.Write("Parsing articles");
             Stopwatch stopwatch = new Stopwatch();
@@ -332,13 +333,8 @@ namespace WikiTasks
                 parser.AddErrorListener(ael);
                 WikiParser.InitContext initContext = parser.init();
                 WikiVisitor visitor = new WikiVisitor(article,
-                    new string[] { "Вершина", "Хребет", "Материк", "Вулкан", "Остров",
-                    "Полуостров", "Группа островов", "Лес", "Равнина", "Массив", "Перевал",
-                    "Коса", "Мыс", "Скала", "Возвышенность", "Горная система", "Кратер",
-                    "Долина", "Пещера", "Архипелаг", "Плоскогорье", "Впадина", "Пустыня",
-                    "Плато", "Атолл", "Побережье", "Нагорье", "Подводная котловина",
-                    "Подводная впадина", "Экологический регион", "Пляж", "Подводный хребет",
-                    "Урочище", /*"Заповедная зона"*/}, null);
+                    new string[] { "НП+Россия", "НП", "НП-Франция", "Древний город", "НП-Израиль",
+                    "НП-Украина", "НП-Турция", "НП-ПНА", "НП-Белоруссия"}, null);
                 visitor.VisitInit(initContext);
                 article.Errors = ael.ErrorList;
 
@@ -384,14 +380,14 @@ namespace WikiTasks
                 if (article.Template == null)
                     continue;
 
-                if (article.Template["Название"] != null)
+                if (article.Template["русское название"] != null)
                 {
-                    article.TemplateName = article.Template["Название"].Value;
+                    article.TemplateName = article.Template["русское название"].Value;
                     if (blacklist.Any(ble => article.TemplateName.Contains(ble)))
                         article.TemplateName = null;
                 }
 
-                if (article.TemplateName != null)
+                if (article.TemplateName != null && article.TemplateName != "")
                     article.TemplateNameNorm = Normalize(article.TemplateName);
 
                 var match = Regex.Match(article.SrcWikiText.Substring(
@@ -499,8 +495,8 @@ namespace WikiTasks
         {
             wpApi = new MwApi("ru.wikipedia.org");
 
-            var ids = ScanCategory("Категория:Природные географические объекты по алфавиту");
-            DownloadArticles(ids);
+            //var ids = ScanCategory("Категория:Населённые пункты по алфавиту");
+            //DownloadArticles(ids);
             ProcessArticles();
         }
 
