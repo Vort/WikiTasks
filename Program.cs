@@ -314,7 +314,7 @@ namespace WikiTasks
             int parserErrors = 0;
 
             //var articles = db.Articles.ToArray();
-            var articles = db.Articles.Take(10000).ToArray();
+            var articles = db.Articles.Take(50000).ToArray();
             //var articles = db.Articles.Take(1000).Where(a => a.Title == "Мюнхен").ToArray();
 
             Console.Write("Parsing articles");
@@ -334,7 +334,12 @@ namespace WikiTasks
                 WikiParser.InitContext initContext = parser.init();
                 WikiVisitor visitor = new WikiVisitor(article,
                     new string[] { "НП+Россия", "НП", "НП-Франция", "Древний город", "НП-Израиль",
-                    "НП-Украина", "НП-Турция", "НП-ПНА", "НП-Белоруссия"}, null);
+                    "НП-Украина", "НП-Турция", "НП-ПНА", "НП-Белоруссия", "Община Германии",
+                    "НП-Абхазия", "Муниципальный район Германии", "Крепость", "НП+", "НП-Казахстан",
+                    "НП-Ирландия", "НП-Канада", "НП-Крым", "НП-США", "НП-Таиланд", "НП-Южная Корея",
+                    "НП-Нидерланды", "НП-Киргизия", "Бывший населённый пункт", "НП-ПМР",
+                    "НП-Молдавия", "НП-Япония", "Поселение Москвы", "НП-Австралия", "НП-Грузия",
+                    "НП-Армения", "НП-Россия", "Объект Всемирного наследия"}, null);
                 visitor.VisitInit(initContext);
                 article.Errors = ael.ErrorList;
 
@@ -380,14 +385,18 @@ namespace WikiTasks
                 if (article.Template == null)
                     continue;
 
-                if (article.Template["русское название"] != null)
+                var paramNames = new List<string>() {
+                    "русское название", "Русское название", "Название поселения", "RusName"
+                };
+
+                if (article.Template.Params.Any(p => paramNames.Contains(p.Name) && p.Value != ""))
                 {
-                    article.TemplateName = article.Template["русское название"].Value;
+                    article.TemplateName = article.Template.Params.First(p => paramNames.Contains(p.Name)).Value;
                     if (blacklist.Any(ble => article.TemplateName.Contains(ble)))
                         article.TemplateName = null;
                 }
 
-                if (article.TemplateName != null && article.TemplateName != "")
+                if (article.TemplateName != null)
                     article.TemplateNameNorm = Normalize(article.TemplateName);
 
                 var match = Regex.Match(article.SrcWikiText.Substring(
