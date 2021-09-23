@@ -4,7 +4,6 @@ using LinqToDB.Mapping;
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
-using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Text;
@@ -36,6 +35,13 @@ namespace WikiTasks
         public string TemplateNameNorm;
         public string TitleName;
     };
+
+    class Mismatch
+    {
+        public string Title;
+        public string TemplateOut;
+        public string PreambleOut;
+    }
 
     class Db : LinqToDB.Data.DataConnection
     {
@@ -314,10 +320,19 @@ namespace WikiTasks
             int parserErrors = 0;
 
             //var articles = db.Articles.ToArray();
-            var articles = db.Articles.Take(50000).ToArray();
+            //var articles = db.Articles.Skip(10000).Take(4000).ToArray();
+            var articles = db.Articles.Skip(10000).Take(4000);
             //var articles = db.Articles.Take(1000).Where(a => a.Title == "Мюнхен").ToArray();
 
-            Console.Write("Parsing articles");
+            string[] blacklist = { "/", "{", ",", "(", "<" };
+            var paramNames = new List<string>() {
+                    "русское название", "Русское название", "Название поселения", "RusName"
+                };
+
+            List<string> errorLog = new List<string>();
+            List<Mismatch> mismatches = new List<Mismatch>();
+
+            Console.Write("Processing articles");
             Stopwatch stopwatch = new Stopwatch();
             stopwatch.Start();
             Parallel.ForEach(articles, article =>
@@ -343,51 +358,25 @@ namespace WikiTasks
                 visitor.VisitInit(initContext);
                 article.Errors = ael.ErrorList;
 
+                if (article.Errors != null && article.Errors.Count != 0)
+                {
+                    lock (errorLog)
+                    {
+                        errorLog.Add("Статья: " + article.Title);
+                        errorLog.AddRange(article.Errors);
+                    }
+                }
+
                 Interlocked.Add(ref lexerErrors, ael.LexerErrors);
                 Interlocked.Add(ref parserErrors, ael.ParserErrors);
 
                 if (Interlocked.Increment(ref processed) % 100 == 0)
                     Console.Write('.');
-            });
-            stopwatch.Stop();
 
-            Console.WriteLine(" Done");
-            Console.WriteLine(" Articles: " + articles.Count());
-            Console.WriteLine(" Parser errors: " + parserErrors);
-            Console.WriteLine(" Lexer errors: " + lexerErrors);
-            Console.WriteLine(" Parsing time: " + stopwatch.Elapsed.TotalSeconds + " sec");
-
-            List<string> errorLog = new List<string>();
-            foreach (Article article in articles)
-            {
-                if (article.Errors == null)
-                    continue;
-                if (article.Errors.Count == 0)
-                    continue;
-                errorLog.Add("Статья: " + article.Title);
-                errorLog.AddRange(article.Errors);
-            }
-            File.WriteAllLines("error_log.txt", errorLog.ToArray(), Encoding.UTF8);
-
-            Thread.CurrentThread.CurrentCulture = CultureInfo.InvariantCulture;
-
-            var l1 = new List<string>();
-            var l2 = new List<string>();
-
-            Console.Write("Processing...");
-
-            string[] blacklist = { "/", "{", ",", "(", "<" };
-
-            foreach (Article article in articles)
-            {
                 article.TitleName = Normalize(article.Title);
 
                 if (article.Template == null)
-                    continue;
-
-                var paramNames = new List<string>() {
-                    "русское название", "Русское название", "Название поселения", "RusName"
-                };
+                    return;
 
                 if (article.Template.Params.Any(p => paramNames.Contains(p.Name) && p.Value != ""))
                 {
@@ -413,7 +402,32 @@ namespace WikiTasks
                     else
                         article.PreambleName = null;
                 }
-            }
+
+                if (article.TemplateNameNorm != null && article.PreambleName != null &&
+                    (article.TitleName != article.TemplateNameNorm ||
+                    article.TitleName != article.PreambleNameNorm))
+                {
+                    var mm = new Mismatch();
+                    mm.Title = article.Title;
+                    mm.TemplateOut = "{{color|gray|— // —}}";
+                    mm.PreambleOut = "{{color|gray|— // —}}";
+                    if (article.TitleName != article.TemplateNameNorm)
+                        mm.TemplateOut = Colorize(article.TemplateName);
+                    if (article.TitleName != article.PreambleNameNorm)
+                        mm.PreambleOut = Colorize(article.PreambleName);
+                    lock (mismatches)
+                        mismatches.Add(mm);
+                }
+
+            });
+            stopwatch.Stop();
+
+            Console.WriteLine(" Done");
+            Console.WriteLine(" Parser errors: " + parserErrors);
+            Console.WriteLine(" Lexer errors: " + lexerErrors);
+            Console.WriteLine(" Processing time: " + stopwatch.Elapsed.TotalSeconds + " sec");
+
+            File.WriteAllLines("error_log.txt", errorLog.ToArray(), Encoding.UTF8);
 
             var sb = new StringBuilder();
 
@@ -422,24 +436,15 @@ namespace WikiTasks
             sb.AppendLine("!Статья");
             sb.AppendLine("!width=\"30%\"|Название в карточке");
             sb.AppendLine("!width=\"30%\"|Название в преамбуле");
-            int i = 1;
-            foreach (Article article in articles.
-                Where(a => a.TemplateNameNorm != null && a.PreambleName != null &&
-                (a.TitleName != a.TemplateNameNorm || a.TitleName != a.PreambleNameNorm)).OrderBy(a => a.Title))
+            mismatches = mismatches.OrderBy(mm => mm.Title).ToList();
+            for (int i = 0; i < mismatches.Count; i++)
             {
-                string templateOut = "{{color|gray|— // —}}";
-                string preambleOut = "{{color|gray|— // —}}";
-                if (article.TitleName != article.TemplateNameNorm)
-                    templateOut = Colorize(article.TemplateName);
-                if (article.TitleName != article.PreambleNameNorm)
-                    preambleOut = Colorize(article.PreambleName);
-
+                var mm = mismatches[i];
                 sb.AppendLine("|-");
-                sb.AppendLine($"| {i}");
-                sb.AppendLine($"| [[{article.Title}]]");
-                sb.AppendLine($"| {templateOut}");
-                sb.AppendLine($"| {preambleOut}");
-                i++;
+                sb.AppendLine($"| {i + 1}");
+                sb.AppendLine($"| [[{mm.Title}]]");
+                sb.AppendLine($"| {mm.TemplateOut}");
+                sb.AppendLine($"| {mm.PreambleOut}");
             }
             sb.AppendLine("|}");
 
