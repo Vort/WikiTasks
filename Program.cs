@@ -282,21 +282,15 @@ namespace WikiTasks
 
         string Normalize2(string name)
         {
-            /*
-            string[] toReplace = { "хребет", "гора", "горы", "полуостров", "острова", "остров",
-                "пещеры", "пещера", "мыс", "долина", "архипелаг", "кратер", "скалы", "полонина",
-                "вулкан", "кальдера", "перевал", "атоллы", "атолл", "жёлоб", "пик", "каньон",
-                "возвышенность", "пустыня", "урочище", "плато", "горное плато", "группа островов",
-                "поднятие", "ущелье", "коса", "балка", "лес", "скала", "рифы", "риф", "равнина",
-                "пляж", "сопка", "цепь"};
-            */
+            string[] toReplace = { "аул", "деревня", "кордон",
+                "рабочий посёлок", "посёлок", "разъезд", "село", "хутор" };
             string normalized = Regex.Replace(name, "\\([^)]+\\)", "").Trim();
-            /*foreach (var replName in toReplace)
+            foreach (var replName in toReplace)
             {
                 normalized = normalized.Replace(replName, "");
                 normalized = normalized.Replace(
                     replName.First().ToString().ToUpper() + replName.Substring(1), "");
-            }*/
+            }
             normalized = normalized.Trim();
             return normalized;
         }
@@ -310,7 +304,7 @@ namespace WikiTasks
         string Colorize(string name)
         {
             return Regex.Replace(
-                name, "([^0-9а-яА-ЯёЁ ’—\\(\\)«»\\.\\-]+)", "{{color|crimson|<nowiki>$1</nowiki>}}");
+                name, "([^0-9а-яА-ЯёЁ ’—\\(\\)«»№\\.\\-]+)", "{{color|crimson|<nowiki>$1</nowiki>}}");
         }
 
         void ProcessArticles()
@@ -319,15 +313,67 @@ namespace WikiTasks
             int lexerErrors = 0;
             int parserErrors = 0;
 
-            //var articles = db.Articles.ToArray();
-            //var articles = db.Articles.Skip(10000).Take(4000).ToArray();
-            var articles = db.Articles.Skip(10000).Take(4000);
-            //var articles = db.Articles.Take(1000).Where(a => a.Title == "Мюнхен").ToArray();
+            var articles = db.Articles;
+            //var articles = db.Articles.Take(50000);
+            //var articles = db.Articles.Take(1000).Where(a => a.Title == "Мюнхен");
 
             string[] blacklist = { "/", "{", ",", "(", "<" };
-            var paramNames = new List<string>() {
-                    "русское название", "Русское название", "Название поселения", "RusName"
-                };
+            var templParams = new Dictionary<string, string>
+            {
+                { "НП", "русское название" },
+                { "НП-Абхазия", "русское название" },
+                { "НП-Австралия", "русское название" },
+                { "НП-Армения", "русское название" },
+                { "НП-Белоруссия", "русское название" },
+                { "НП-Великобритания", "русское название" },
+                { "НП-Грузия", "русское название" },
+                { "НП/Грузия", "русское название" },
+                { "НП-Донбасс", "русское название" },
+                { "НП-Израиль", "русское название" },
+                { "НП-Ирландия", "русское название" },
+                { "НП-Казахстан", "русское название" },
+                { "НП-Канада", "русское название" },
+                { "НП-Киргизия", "русское название" },
+                { "НП-Крым", "русское название" },
+                { "НП-Майотта", "русское название" },
+                { "НП-Мексика", "русское название" },
+                { "НП-Молдавия", "русское название" },
+                { "НП-Нидерланды", "русское название" },
+                { "НП-НКР", "русское название" },
+                { "НП-ОАЭ", "русское название" },
+                { "НП-ПМР", "русское название" },
+                { "НП-ПНА", "русское название" },
+                { "НП-Польша", "русское название" },
+                { "НП-Россия", "русское название" },
+                { "НП-США", "русское название" },
+                { "НП-Северная Ирландия", "русское название" },
+                { "НП-Таиланд", "русское название" },
+                { "НП-Тайвань", "русское название" },
+                { "НП-Турция", "русское название" },
+                { "НП-Украина", "русское название" },
+                { "НП-Украина2", "русское название" },
+                { "НП-Франция", "русское название" },
+                { "НП-Южная Корея", "русское название" },
+                { "НП-Южная Осетия", "русское название" },
+                { "НП-Япония", "русское название" },
+                { "НП+", "русское название" },
+                { "НП+Россия", "русское название" },
+                { "Бывший НП", "русское название" },
+                { "Бывший населённый пункт", "русское название" },
+                { "Достопримечательность", "Русское название"},
+                { "Древний город", "русское название" },
+                { "Историческая местность в Москве", "Название" },
+                { "Исторический район", "Название" },
+                { "Канадский муниципалитет", "название" },
+                { "Крепость", "Русское название" },
+                { "Микрорайон", "Название" },
+                { "Муниципальный район Германии", "русское название" },
+                { "Община Германии", "русское название" },
+                { "Объект Всемирного наследия", "RusName" },
+                { "Район", "название" },
+                { "Поселение Москвы", "Название поселения" },
+                { "Префектура Японии", "Название" }
+            };
 
             List<string> errorLog = new List<string>();
             List<Mismatch> mismatches = new List<Mismatch>();
@@ -347,14 +393,7 @@ namespace WikiTasks
                 parser.RemoveErrorListeners();
                 parser.AddErrorListener(ael);
                 WikiParser.InitContext initContext = parser.init();
-                WikiVisitor visitor = new WikiVisitor(article,
-                    new string[] { "НП+Россия", "НП", "НП-Франция", "Древний город", "НП-Израиль",
-                    "НП-Украина", "НП-Турция", "НП-ПНА", "НП-Белоруссия", "Община Германии",
-                    "НП-Абхазия", "Муниципальный район Германии", "Крепость", "НП+", "НП-Казахстан",
-                    "НП-Ирландия", "НП-Канада", "НП-Крым", "НП-США", "НП-Таиланд", "НП-Южная Корея",
-                    "НП-Нидерланды", "НП-Киргизия", "Бывший населённый пункт", "НП-ПМР",
-                    "НП-Молдавия", "НП-Япония", "Поселение Москвы", "НП-Австралия", "НП-Грузия",
-                    "НП-Армения", "НП-Россия", "Объект Всемирного наследия"}, null);
+                WikiVisitor visitor = new WikiVisitor(article, templParams.Keys.ToArray(), null);
                 visitor.VisitInit(initContext);
                 article.Errors = ael.ErrorList;
 
@@ -378,9 +417,14 @@ namespace WikiTasks
                 if (article.Template == null)
                     return;
 
-                if (article.Template.Params.Any(p => paramNames.Contains(p.Name) && p.Value != ""))
+                var templateNameNorm = 
+                    article.Template.Name.First().ToString().ToUpper() +
+                    article.Template.Name.Substring(1);
+
+                string paramName = templParams[templateNameNorm];
+                if (article.Template[paramName] != null && article.Template[paramName].Value != "")
                 {
-                    article.TemplateName = article.Template.Params.First(p => paramNames.Contains(p.Name)).Value;
+                    article.TemplateName = article.Template[paramName].Value;
                     if (blacklist.Any(ble => article.TemplateName.Contains(ble)))
                         article.TemplateName = null;
                 }
@@ -418,7 +462,6 @@ namespace WikiTasks
                     lock (mismatches)
                         mismatches.Add(mm);
                 }
-
             });
             stopwatch.Stop();
 
@@ -432,7 +475,7 @@ namespace WikiTasks
             var sb = new StringBuilder();
 
             sb.AppendLine("{|class=\"wide sortable\" style=\"table-layout: fixed;word-wrap:break-word\"");
-            sb.AppendLine("!width=\"12em\"|№");
+            sb.AppendLine("!width=\"16em\"|№");
             sb.AppendLine("!Статья");
             sb.AppendLine("!width=\"30%\"|Название в карточке");
             sb.AppendLine("!width=\"30%\"|Название в преамбуле");
@@ -509,8 +552,8 @@ namespace WikiTasks
         {
             wpApi = new MwApi("ru.wikipedia.org");
 
-            //var ids = ScanCategory("Категория:Населённые пункты по алфавиту");
-            //DownloadArticles(ids);
+            var ids = ScanCategory("Категория:Населённые пункты по алфавиту");
+            DownloadArticles(ids);
             ProcessArticles();
         }
 
