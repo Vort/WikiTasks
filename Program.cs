@@ -247,7 +247,7 @@ namespace WikiTasks
             db.Articles.Delete(a => deleted.Contains(a.PageId));
 
             Console.Write("Downloading articles");
-            var chunks = SplitToChunks(todl.Keys.OrderBy(x => x).ToArray(), 100);
+            var chunks = SplitToChunks(todl.Keys.OrderBy(x => x).ToArray(), 50);
             foreach (var chunk in chunks)
             {
                 string idsChunk = string.Join("|", chunk);
