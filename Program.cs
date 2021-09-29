@@ -275,6 +275,7 @@ namespace WikiTasks
         string Normalize1(string name)
         {
             string normalized = name.Replace("\u0301", "");
+            normalized = normalized.Replace("†", "");
             normalized = normalized.Replace("&nbsp;", " ");
             normalized = normalized.Replace("\u00A0", " ");
             return normalized;
@@ -282,7 +283,7 @@ namespace WikiTasks
 
         string Normalize2(string name)
         {
-            string[] toReplace = { "аул", "деревня", "кордон",
+            string[] toReplace = { "аул", "деревня", "зимовье", "кордон",
                 "рабочий посёлок", "посёлок", "разъезд", "село", "хутор" };
             string normalized = Regex.Replace(name, "\\([^)]+\\)", "").Trim();
             foreach (var replName in toReplace)
