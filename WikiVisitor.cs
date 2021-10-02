@@ -1,4 +1,5 @@
 ﻿using Antlr4.Runtime.Tree;
+using System.Collections.Generic;
 using System.Linq;
 using System.Text.RegularExpressions;
 
@@ -31,10 +32,27 @@ namespace WikiTasks
             newline = match.Groups[2].Value.EndsWith("\n");
         }
 
+        string CapitalizeFirstLetter(string s)
+        {
+            if (s.Length == 0)
+                return s;
+            else if (s.Length == 1)
+                return char.ToUpper(s[0]).ToString();
+            else
+                return char.ToUpper(s[0]) + s.Substring(1);
+        }
+
         public override object VisitTempl(WikiParser.TemplContext templContext)
         {
             var template = new Template();
-            template.Name = templContext.children[1].GetText().Trim();
+            var nameParts = new List<string>();
+            for (int i = 1; i < templContext.ChildCount - 1; i++)
+            {
+                if (templContext.children[i] is WikiParser.ParamContext)
+                    break;
+                nameParts.Add(templContext.children[i].GetText());
+            }
+            template.Name = string.Concat(nameParts).Trim();
             template.StartPosition = templContext.start.StartIndex;
             template.StopPosition = templContext.stop.StopIndex + 1;
             var prevParam = new TemplateParam();
@@ -85,10 +103,10 @@ namespace WikiTasks
             bool templMatch = false;
             bool paramMatch = false;
 
-            var normName1 = template.Name.First().ToString().ToUpper() + template.Name.Substring(1);
+            var normName1 = CapitalizeFirstLetter(template.Name);
             foreach (var templName in templNames)
             {
-                var normName2 = templName.First().ToString().ToUpper() + templName.Substring(1);
+                var normName2 = CapitalizeFirstLetter(templName);
                 if (normName1 == normName2)
                 {
                     templMatch = true;

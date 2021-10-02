@@ -264,21 +264,27 @@ namespace WikiTasks
             Console.WriteLine(" Done");
         }
 
-        string Normalize1(string name)
+        string NormalizeCharacters(string name)
         {
             string normalized = name.Replace("\u0301", "");
+            normalized = normalized.Replace("†", "");
             normalized = normalized.Replace("&nbsp;", " ");
             normalized = normalized.Replace("\u00A0", " ");
             return normalized;
         }
 
-        string Normalize2(string name)
+        string NormalizeParentheses(string name)
+        {
+            return Regex.Replace(name, "\\([^)]+\\)", "").Trim();
+        }
+
+        string NormalizeTypeNames(string name)
         {
             string[] toReplace = { "водохранилище", "озеро", "пруд-накопитель", "пруд", "сардоба",
                 "горный парк", "река", "канал", "болото", "пролив", "водопады", "водопад", "ручей",
                 "ледник", "море", "минеральная вода", "залив", "бухта", "губа", "лагуна", "овраг" };
 
-            string normalized = Regex.Replace(name, "\\([^)]+\\)", "").Trim();
+            string normalized = name;
             foreach (var replName in toReplace)
             {
                 normalized = normalized.Replace(replName, "");
@@ -287,12 +293,6 @@ namespace WikiTasks
             }
             normalized = normalized.Trim();
             return normalized;
-        }
-
-
-        string Normalize(string name)
-        {
-            return Normalize2(Normalize1(name));
         }
 
         string Colorize(string name)
@@ -309,7 +309,7 @@ namespace WikiTasks
 
             var articles = db.Articles.ToArray();
             //var articles = db.Articles.Take(1000).ToArray();
-            //var articles = db.Articles.Where(a => a.Title == "Большой Сарышыганак").ToArray();
+            //var articles = db.Articles.Where(a => a.Title == "Скобидо").ToArray();
 
             Console.Write("Parsing articles");
             Stopwatch stopwatch = new Stopwatch();
@@ -371,7 +371,8 @@ namespace WikiTasks
 
             foreach (Article article in articles)
             {
-                article.TitleName = Normalize(article.Title);
+                article.TitleName = NormalizeTypeNames(
+                    NormalizeParentheses(NormalizeCharacters(article.Title)));
 
                 if (article.Template == null)
                     continue;
@@ -384,7 +385,10 @@ namespace WikiTasks
                 }
 
                 if (article.TemplateName != null)
-                    article.TemplateNameNorm = Normalize(article.TemplateName);
+                {
+                    article.TemplateNameNorm = NormalizeTypeNames(
+                        NormalizeCharacters(article.TemplateName));
+                }
 
                 var match = Regex.Match(article.SrcWikiText.Substring(
                     article.Template.StopPosition), "'''([^']+)'''");
@@ -394,8 +398,8 @@ namespace WikiTasks
                     article.PreambleName = Regex.Replace(article.PreambleName, "^([^<]+).*", "$1");
                     if (!article.PreambleName.Contains('[') && !(article.PreambleName.Length == 1))
                     {
-                        article.PreambleName = Normalize1(article.PreambleName);
-                        article.PreambleNameNorm = Normalize2(article.PreambleName);
+                        article.PreambleName = NormalizeCharacters(article.PreambleName);
+                        article.PreambleNameNorm = NormalizeTypeNames(article.PreambleName);
                     }
                     else
                         article.PreambleName = null;
