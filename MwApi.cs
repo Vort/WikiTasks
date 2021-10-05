@@ -132,7 +132,13 @@ namespace WikiTasks
                 if (response.Headers.RetryAfter != null)
                     Thread.Sleep((int)response.Headers.RetryAfter.Delta.Value.TotalMilliseconds);
                 else
-                    return GZipUnpack(await response.Content.ReadAsByteArrayAsync());
+                {
+                    byte[] bytes = await response.Content.ReadAsByteArrayAsync();
+                    if (response.Content.Headers.ContentEncoding.Contains("gzip"))
+                        return GZipUnpack(bytes);
+                    else
+                        return Encoding.UTF8.GetString(bytes);
+                }
             }
         }
 
