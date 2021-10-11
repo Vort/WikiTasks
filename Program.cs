@@ -13,22 +13,22 @@ using System.Xml;
 
 namespace WikiTasks
 {
-    class GKGNRecord
-    {
-        public int Id;
-        public string Name;
-        public string Type;
-        public string ATE1;
-        public string ATE2;
-        public double Lat;
-        public double Lon;
-    }
-
     class ResultRecord
     {
+        public string Title;
         public string WdId;
-        public string GkgnId;
+        public string Region;
+        public string EGROKN;
+        public string WV;
     }
+
+    class WdIdsRecord
+    {
+        public string WdId;
+        public string WdEGROKN;
+        public string WdWV;
+    }
+
 
     class Program
     {
@@ -36,7 +36,7 @@ namespace WikiTasks
 
         static Db db;
 
-        List<GKGNRecord> gkgnRecords;
+        List<WdIdsRecord> wdIds;
 
         public class Db : LinqToDB.Data.DataConnection
         {
@@ -106,7 +106,7 @@ namespace WikiTasks
             db.CreateTable<Article>();
 
             Console.Write("Downloading articles");
-            var chunks = SplitToChunks(ids, 500);
+            var chunks = SplitToChunks(ids, 100);
             foreach (var chunk in chunks)
             {
                 string idsChunk = string.Join("|", chunk);
@@ -161,10 +161,17 @@ namespace WikiTasks
             Console.WriteLine(" Done");
         }
 
-        string Normalize(string name)
+        string CombineTwoParams(TemplateParam p1, TemplateParam p2)
         {
-            return Regex.Replace(Regex.Replace(name, " \\([^(]+\\)", "").Replace("ё", "е"),
-                " (водохранилище|губа|пруд|ильмень|залив|канал|ледник|озеро)$", "");
+            string s1 = null;
+            string s2 = null;
+            if (p1 != null && p1.Value != "")
+                s1 = p1.Value;
+            if (p2 != null && p2.Value != "")
+                s2 = p2.Value;
+            if (s1 != null || s2 != null)
+                return $"{s1} / {s2}";
+            return "";
         }
 
         void ProcessArticles()
@@ -174,8 +181,8 @@ namespace WikiTasks
             int parserErrors = 0;
 
             var articles = db.Articles.ToArray();
-            //var articles = db.Articles.Take(1000).ToArray();
-            //var articles = db.Articles.Where(a => a.Title == "Лабынкыр").ToArray();
+            //var articles = db.Articles.Take(100).ToArray();
+            //var articles = db.Articles.Where(a => a.Title == "Храм Жён-Мироносиц (Великий Новгород)").ToArray();
 
             Console.Write("Parsing articles");
             Stopwatch stopwatch = new Stopwatch();
@@ -193,8 +200,8 @@ namespace WikiTasks
                 parser.AddErrorListener(ael);
                 WikiParser.InitContext initContext = parser.init();
                 WikiVisitor visitor = new WikiVisitor(article,
-                    new string[] { "ГКГН", "РЗНГО",
-                        "Реестры зарегистрированных наименований географических объектов" }, null);
+                    new string[] { "Культурное наследие народов РФ",
+                        "Культурное наследие народов РФ 4" }, null);
                 visitor.VisitInit(initContext);
                 article.Errors = ael.ErrorList;
 
@@ -235,42 +242,68 @@ namespace WikiTasks
                     sbExcl.AppendLine($"* [[{article.Title}]] | templ_fail");
                     continue;
                 }
-                if (article.Template.Params.Count > 2)
+
+                var cat1p = article.Template["Статус"];
+                var cat2p = article.Template[4, true];
+
+                if (cat1p != null && cat1p.Value == "В" ||
+                    cat2p != null && cat2p.Value == "В")
                 {
-                    var gkgnVal = article.Template.Params[2].Value;
-                    if (!Regex.IsMatch(gkgnVal, "[0-9]{7}"))
-                        sbExcl.AppendLine($"* [[{article.Title}]] | val_fail | {gkgnVal}");
-                    else
-                        results.Add(new ResultRecord { WdId = article.WdId, GkgnId = gkgnVal });
+                    continue;
+                }
+
+                var lostp = article.Template["утрачен"];
+                if (lostp != null)
+                    continue;
+
+                var reg = CombineTwoParams(
+                    article.Template["Регион"],
+                    article.Template[3, true]);
+
+                if (reg != "")
+                {
+                    var rr = new ResultRecord();
+                    rr.Title = article.Title;
+                    rr.WdId = article.WdId;
+                    rr.Region = reg;
+                    rr.EGROKN = CombineTwoParams(
+                        article.Template["рег_N"],
+                        article.Template[1, true]);
+                    var wdrecs = wdIds.Where(ids => ids.WdId == article.WdId);
+                    rr.EGROKN += "<br>" + string.Join(" / ", wdrecs.Select(ids => ids.WdEGROKN));
+                    var wvp = article.Template["Код-памятника"];
+                    rr.WV = wvp != null ? wvp.Value : "";
+                    rr.WV += "<br>" + string.Join(" / ", wdrecs.Select(ids => ids.WdWV));
+                    results.Add(rr);
                 }
             }
 
-            var verifiedResults = new List<ResultRecord>();
-            foreach (ResultRecord result in results)
+
+            var sb = new StringBuilder();
+
+            sb.AppendLine("{|class=\"wide sortable\" style=\"table-layout: fixed;word-wrap:break-word\"");
+            sb.AppendLine("!width=\"16em\"|№");
+            sb.AppendLine("!Заголовок");
+            sb.AppendLine("!width=\"90em\"|Элемент");
+            sb.AppendLine("!Регион");
+            sb.AppendLine("!ЕГР ОКН");
+            sb.AppendLine("!Викигид");
+            results = results.OrderBy(mm => mm.Title).ToList();
+            for (int i = 0; i < results.Count; i++)
             {
-                var articleTitle = articles.First(a => a.WdId == result.WdId).Title;
-                var objName = Normalize(articleTitle);
-                var gkgnId = int.Parse(result.GkgnId);
-                GKGNRecord gkgnRec = gkgnRecords.FirstOrDefault(r => r.Id == gkgnId);
-                if (gkgnRec == null)
-                    sbExcl.AppendLine($"* [[{articleTitle}]] | no_gkgn_id_in_db | {result.GkgnId}");
-                else
-                {
-                    var gkgnName = Normalize(gkgnRec.Name);
-                    if (objName == gkgnName)
-                        verifiedResults.Add(result);
-                    else
-                        sbExcl.AppendLine($"* [[{articleTitle}]] | name_mismatch | {result.GkgnId} | {gkgnRec.Name}");
-                }
+                var rr = results[i];
+                sb.AppendLine("|-");
+                sb.AppendLine($"| {i + 1}");
+                sb.AppendLine($"| [[{rr.Title}]]");
+                sb.AppendLine($"| [[:d:{rr.WdId}|{rr.WdId}]]");
+                sb.AppendLine($"| {rr.Region}");
+                sb.AppendLine($"| {rr.EGROKN}");
+                sb.AppendLine($"| {rr.WV}");
             }
-
-            verifiedResults = verifiedResults.OrderByDescending(
-                r => int.Parse(r.WdId.Substring(1))).ToList();
-            var resString = string.Join(Environment.NewLine,
-                verifiedResults.Select(r => $"{r.WdId} | {r.GkgnId}"));
+            sb.AppendLine("|}");
 
             File.WriteAllText("result_excl.txt", sbExcl.ToString());
-            File.WriteAllText("result.txt", resString);
+            File.WriteAllText("result.txt", sb.ToString());
             Console.WriteLine(" Done");
         }
 
@@ -314,24 +347,31 @@ namespace WikiTasks
             return idList;
         }
 
-        private void LoadGkgn()
+        void RequestWdCodes()
         {
-            Console.Write("Loading gkgn...");
-            gkgnRecords = new List<GKGNRecord>();
-            var lines = File.ReadAllLines(
-                "goskatalog_Spisok_NP_i_ATE_na_vsu_RF_1_1.csv");
-            foreach (var line in lines)
+            Console.Write("Requesting wikidata codes...");
+            wdIds = new List<WdIdsRecord>();
+
+            string[] aids = db.Articles.Where(
+                a => a.WdId != null).Select(a => a.WdId).Distinct().ToArray();
+            string sparqlTemplate =
+                "SELECT ?item ?egrokn ?wv WHERE" +
+                "{" +
+                "  VALUES ?item { __ids__ } ." +
+                "  OPTIONAL { ?item wdt:P5381 ?egrokn . }" +
+                "  OPTIONAL { ?item wdt:P1483 ?wv . }" +
+                "}";
+            var spResult = SparqlApi.Query(sparqlTemplate.Replace(
+                "__ids__", string.Join(" ", aids.Select(x => $"wd:{x}"))));
+            foreach (var r1 in spResult)
             {
-                var ls = line.Split('|');
-                var rec = new GKGNRecord();
-                rec.Id = int.Parse(ls[0]);
-                rec.Name = ls[1];
-                rec.Type = ls[2];
-                rec.ATE1 = ls[3];
-                rec.ATE2 = ls[4];
-                rec.Lat = double.Parse(ls[5]); // rus locale required
-                rec.Lon = double.Parse(ls[6]);
-                gkgnRecords.Add(rec);
+                var r2 = new WdIdsRecord();
+                r2.WdId = r1["item"];
+                if (r1.ContainsKey("egrokn"))
+                    r2.WdEGROKN = r1["egrokn"];
+                if (r1.ContainsKey("wv"))
+                    r2.WdWV = r1["wv"];
+                wdIds.Add(r2);
             }
             Console.WriteLine(" Done");
         }
@@ -340,13 +380,13 @@ namespace WikiTasks
         {
             wpApi = new MwApi("ru.wikipedia.org");
 
-            var ids = SearchArticles("incategory:\"Водные объекты по алфавиту\""+
-                " hastemplate:\"Реестры зарегистрированных наименований географических объектов\"" +
-                " -incategory:\"Карточка водного объекта: Викиданные: указано свойство: код ГКГН\"");
+            /*
+            var ids = SearchArticles("hastemplate:\"Культурное наследие народов РФ\"");
             DownloadArticles(ids.Distinct().ToArray());
             FillWikidataIds();
+            */
 
-            LoadGkgn();
+            RequestWdCodes();
             ProcessArticles();
         }
 

@@ -40,11 +40,29 @@ namespace WikiTasks
             }
         }
 
+        /*
         public TemplateParam this[int index]
         {
             get
             {
                 return Params[index];
+            }
+        }*/
+
+        public TemplateParam this[int index, bool unnamed = false]
+        {
+            get
+            {
+                if (unnamed)
+                {
+                    var unnpa = Params.Where(p => p.Name == null).ToArray();
+                    if (index > unnpa.Length)
+                        return null;
+                    else
+                        return unnpa[index - 1];
+                }
+                else
+                    return Params[index];
             }
         }
 
