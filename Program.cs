@@ -1,6 +1,7 @@
 ﻿using Antlr4.Runtime;
 using LinqToDB;
 using LinqToDB.Mapping;
+using Newtonsoft.Json.Linq;
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
@@ -22,25 +23,34 @@ namespace WikiTasks
         [Column()]
         public int RevisionId;
         [Column()]
+        public string WdId;
+        [Column()]
         public string Title;
         [Column()]
         public string SrcWikiText;
 
         public List<string> Errors;
         public Template Template;
-
-        public string PreambleName;
-        public string PreambleNameNorm;
-        public string TemplateName;
-        public string TemplateNameNorm;
-        public string TitleName;
     };
+
+    [Table(Name = "Items")]
+    class DbItem
+    {
+        [PrimaryKey]
+        public string ItemId;
+        [Column()]
+        public int RevisionId;
+        [Column()]
+        public string Data;
+    }
 
     class Mismatch
     {
         public string Title;
-        public string TemplateOut;
-        public string PreambleOut;
+        public string WdId;
+        public string TypeOut;
+        public string Code1Out;
+        public string Code2Out;
     }
 
     class Db : LinqToDB.Data.DataConnection
@@ -48,6 +58,7 @@ namespace WikiTasks
         public Db() : base("Db") { }
 
         public ITable<Article> Articles { get { return GetTable<Article>(); } }
+        public ITable<DbItem> Items { get { return GetTable<DbItem>(); } }
     }
 
     class TemplateParam
@@ -80,7 +91,7 @@ namespace WikiTasks
                 else if (pl.Length == 1)
                     return pl[0];
                 else
-                    throw new Exception();
+                    return null; // throw new Exception();
             }
         }
 
@@ -164,31 +175,48 @@ namespace WikiTasks
         public int StopPosition;
     }
 
+    static class ChunkExtension
+    {
+        public static IEnumerable<IEnumerable<T>> Chunks<T>(
+            this IEnumerable<T> source, int chunkSize)
+        {
+            T[] items = new T[chunkSize];
+            int count = 0;
+            foreach (var item in source)
+            {
+                items[count] = item;
+                count++;
+
+                if (count == chunkSize)
+                {
+                    yield return items;
+                    items = new T[chunkSize];
+                    count = 0;
+                }
+            }
+            if (count > 0)
+            {
+                if (count == chunkSize)
+                    yield return items;
+                else
+                {
+                    T[] tempItems = new T[count];
+                    Array.Copy(items, tempItems, count);
+                    yield return tempItems;
+                }
+            }
+        }
+    }
+
     class Program
     {
         MwApi wpApi;
+        MwApi wdApi;
         static Db db;
+        static Db db2;
 
-        List<List<T>> SplitToChunks<T>(T[] elements, int chunkSize)
-        {
-            int chunkCount = (elements.Length + chunkSize - 1) / chunkSize;
-
-            var chunks = new List<List<T>>();
-            for (int i = 0; i < chunkCount; i++)
-            {
-                var chunk = new List<T>();
-                for (int j = 0; j < chunkSize; j++)
-                {
-                    int k = i * chunkSize + j;
-                    if (k >= elements.Length)
-                        break;
-                    chunk.Add(elements[k]);
-                }
-                chunks.Add(chunk);
-            }
-
-            return chunks;
-        }
+        Dictionary<int, string> qToStr;
+        char[] nowikifyChars;
 
         static bool HaveTable(string name)
         {
@@ -222,8 +250,51 @@ namespace WikiTasks
             return articles;
         }
 
+        void FillWikidataIds()
+        {
+            Console.Write("Filling wikidata ids");
+
+            foreach (var chunk in db.Articles.Select(a => a.PageId).ToArray().Chunks(500))
+            {
+                var wdIds = new Dictionary<int, string>();
+                foreach (int pid in chunk)
+                    wdIds.Add(pid, null);
+
+                string xml = wpApi.PostRequest(
+                    "action", "query",
+                    "prop", "pageprops",
+                    "ppprop", "wikibase_item",
+                    "format", "xml",
+                    "pageids", string.Join("|", chunk));
+
+                XmlDocument doc = new XmlDocument();
+                doc.LoadXml(xml);
+
+                foreach (XmlNode pageNode in doc.SelectNodes("/api/query/pages/page/pageprops"))
+                {
+                    int articleId = int.Parse(pageNode.ParentNode.Attributes["pageid"].Value);
+                    string wdId = pageNode.Attributes["wikibase_item"].Value;
+                    wdIds[articleId] = wdId;
+                }
+
+                db.BeginTransaction();
+                foreach (var kv in wdIds)
+                {
+                    // For some reason it is faster than .Set() method
+                    db.Update(
+                        new Article { PageId = kv.Key, WdId = kv.Value },
+                        (a, b) => b.ColumnName == nameof(Article.WdId));
+                }
+                db.CommitTransaction();
+
+                Console.Write('.');
+            }
+            Console.WriteLine(" Done");
+        }
+
         void DownloadArticles(Dictionary<int, int> ids)
         {
+            Console.Write("Preparing articles download...");
             if (!HaveTable("Articles"))
                 db.CreateTable<Article>();
 
@@ -245,10 +316,10 @@ namespace WikiTasks
             if (deleted.Length > 100)
                 throw new Exception("Too many articles deleted. Looks like a bug");
             db.Articles.Delete(a => deleted.Contains(a.PageId));
+            Console.WriteLine(" Done");
 
             Console.Write("Downloading articles");
-            var chunks = SplitToChunks(todl.Keys.OrderBy(x => x).ToArray(), 50);
-            foreach (var chunk in chunks)
+            foreach (var chunk in todl.Keys.OrderBy(x => x).Chunks(50))
             {
                 string idsChunk = string.Join("|", chunk);
                 string xml = wpApi.PostRequest(
@@ -272,40 +343,148 @@ namespace WikiTasks
             Console.WriteLine(" Done");
         }
 
-        string Normalize1(string name)
+        void DownloadItems(Dictionary<string, int> ids)
         {
-            string normalized = name.Replace("\u0301", "");
-            normalized = normalized.Replace("†", "");
-            normalized = normalized.Replace("&nbsp;", " ");
-            normalized = normalized.Replace("\u00A0", " ");
-            return normalized;
-        }
+            Console.Write("Preparing items download...");
+            if (!HaveTable("Items"))
+                db.CreateTable<DbItem>();
 
-        string Normalize2(string name)
-        {
-            string[] toReplace = { "аул", "деревня", "зимовье", "кордон",
-                "рабочий посёлок", "посёлок", "разъезд", "село", "хутор" };
-            string normalized = Regex.Replace(name, "\\([^)]+\\)", "").Trim();
-            foreach (var replName in toReplace)
+            var dbids = db.Items.ToDictionary(a => a.ItemId, a => a.RevisionId);
+
+
+            var idsset = new HashSet<string>(ids.Keys);
+            var dbidsset = new HashSet<string>(dbids.Keys);
+
+            var deleted = dbidsset.Except(idsset).ToArray();
+            var added = idsset.Except(dbidsset).ToArray();
+            var existing = idsset.Intersect(dbidsset).ToArray();
+            var changed = existing.Where(id => ids[id] != dbids[id]).ToArray();
+
+            var todl = added.ToDictionary(id => id, id => true).Union(
+                changed.ToDictionary(id => id, id => false)).ToDictionary(
+                kv => kv.Key, kv => kv.Value);
+
+            if (deleted.Length > 100)
+                throw new Exception("Too many items deleted. Looks like a bug");
+            db.Items.Delete(i => deleted.Contains(i.ItemId));
+            Console.WriteLine(" Done");
+
+            Console.Write("Downloading items");
+            foreach (var chunk in todl.Keys.OrderBy(x => x).Chunks(100))
             {
-                normalized = normalized.Replace(replName, "");
-                normalized = normalized.Replace(
-                    replName.First().ToString().ToUpper() + replName.Substring(1), "");
+                for (;;)
+                {
+                    string json = wdApi.PostRequest(
+                        "action", "wbgetentities",
+                        "format", "json",
+                        "props", "info|claims",
+                        "ids", string.Join("|", chunk),
+                        "redirects", "no");
+                    Console.Write('.');
+
+                    var obj = JObject.Parse(json);
+
+                    if (obj["success"] == null)
+                        continue; // T272319
+                    if (obj.Count != 2)
+                        throw new Exception();
+                    if (!obj["entities"].All(t => t is JProperty))
+                        throw new Exception();
+
+                    db.BeginTransaction();
+                    foreach (JToken t in obj["entities"])
+                    {
+                        var kv = t as JProperty;
+                        var item = new DbItem
+                        {
+                            ItemId = kv.Name,
+                            RevisionId = (int)kv.Value["lastrevid"],
+                            Data = kv.Value.ToString()
+                        };
+
+                        if (todl[item.ItemId])
+                            db.Insert(item);
+                        else
+                            db.Update(item);
+                    }
+                    db.CommitTransaction();
+                    break;
+                }
             }
-            normalized = normalized.Trim();
-            return normalized;
+            Console.WriteLine(" Done");
         }
 
-
-        string Normalize(string name)
+        Dictionary<string, int> GetItemsRevisions()
         {
-            return Normalize2(Normalize1(name));
+            Console.Write("Getting items revisions");
+
+            var ids = new Dictionary<string, int>();
+            string[] qids = db.Articles.
+                Where(a => a.WdId != null).Select(a => a.WdId).ToArray();
+            foreach (var chunk in qids.Chunks(500))
+            {
+                string xml = wdApi.PostRequest(
+                    "action", "query",
+                    "format", "xml",
+                    "prop", "revisions",
+                    "titles", string.Join("|", chunk));
+                Console.Write('.');
+
+                XmlDocument doc = new XmlDocument();
+                doc.LoadXml(xml);
+
+                foreach (XmlNode node in doc.SelectNodes("/api/query/pages/page"))
+                {
+                    string title = node.Attributes["title"].Value;
+                    int revisionId = int.Parse(node.
+                        SelectSingleNode("revisions/rev").Attributes["revid"].Value);
+                    ids.Add(title, revisionId);
+                }
+            }
+            Console.WriteLine(" Done");
+            return ids;
         }
 
-        string Colorize(string name)
+        string[] GetWdTypes(Item item)
         {
-            return Regex.Replace(
-                name, "([^0-9а-яА-ЯёЁ ’—\\(\\)«»№\\.\\-]+)", "{{color|crimson|<nowiki>$1</nowiki>}}");
+            var p31 = new PId(31);
+
+            var claims = item.Claims;
+            if (!claims.ContainsKey(p31))
+                return null;
+
+            var result = new List<string>();
+
+            foreach (var c in claims[p31])
+            {
+                var typeId = c.MainSnak.DataValue.Value as QId;
+
+                if (qToStr.ContainsKey(typeId.Id))
+                    result.Add(qToStr[typeId.Id]);
+                else
+                    result.Add(typeId.ToString());
+            }
+
+            return result.ToArray();
+        }
+
+        string[] GetWdIds(Item item, PId p)
+        {
+            var claims = item.Claims;
+            if (!claims.ContainsKey(p))
+                return null;
+
+            return claims[p].Select(c =>
+                c.MainSnak.DataValue == null ?
+                "—" : (string)c.MainSnak.DataValue.Value).ToArray();
+        }
+
+        string Nowikify(string s)
+        {
+            if (s.IndexOfAny(nowikifyChars) == -1)
+                return s;
+            else
+                return $"<nowiki>{s}</nowiki>";
         }
 
         void ProcessArticles()
@@ -315,11 +494,20 @@ namespace WikiTasks
             int parserErrors = 0;
 
             var articles = db.Articles;
-            //var articles = db.Articles.Take(50000);
+            //var articles = db.Articles.Skip(19400).Take(800);
             //var articles = db.Articles.Take(1000).Where(a => a.Title == "Мюнхен");
 
-            string[] blacklist = { "/", "{", ",", "(", "<" };
-            var templParams = new Dictionary<string, string>
+            nowikifyChars = new char[] { '\'', '<', '>', '[', ']', '{', '}' };
+
+            //string[] blacklist = { "/", "{", ",", "(", "<" };
+
+            var templNames = new string[]
+            {
+                "НП-Россия",
+                "НП+Россия"
+            };
+
+            /*var templParams = new Dictionary<string, string>
             {
                 { "НП", "русское название" },
                 { "НП-Абхазия", "русское название" },
@@ -374,7 +562,72 @@ namespace WikiTasks
                 { "Район", "название" },
                 { "Поселение Москвы", "Название поселения" },
                 { "Префектура Японии", "Название" }
+            };*/
+
+            qToStr = new Dictionary<int, string>
+            {
+                { 515, "город" },
+                { 532, "село" },
+                { 5084, "деревня" },
+                { 55488, "железнодорожная станция" },
+                { 74047, "город-призрак" },
+                { 183366, "территория" },
+                { 188509, "пригород" },
+                { 190107, "метеостанция" },
+                { 192287, "административно-территориальная единица России" },
+                { 486972, "населённый пункт" },
+                { 505774, "гидрологический пост" },
+                { 604435, "микрорайон" },
+                { 748331, "станица" },
+                { 771444, "аул" },
+                { 1130491, "слобода" },
+                { 1350536, "наукоград" },
+                { 1434274, "урочище" },
+                { 1549591, "город с населением более 100 000 человек" },
+                { 1782540, "посёлок станции" },
+                { 2023000, "хутор" },
+                { 2191999, "погост" },
+                { 2514025, "посёлок" },
+                { 2974842, "покинутый город" },
+                { 2989457, "посёлок городского типа" },
+                { 3374262, "местечко" },
+                { 4129217, "выселок" },
+                { 4155473, "дачный посёлок" },
+                { 4286337, "район города" },
+                { 4375340, "починок" },
+                { 4946461, "курорт" },
+                { 5175541, "коттеджный посёлок" },
+                { 7930989, "город" },
+                { 10354598, "сельский/деревенский населённый пункт" },
+                { 12116124, "кутан" },
+                { 15078955, "посёлок городского типа" /* России */ },
+                { 15195406, "район города в России" },
+                { 15243209, "исторический район" },
+                { 16652878, "заимка" },
+                { 18632459, "улус" },
+                { 18729324, "разъезд" },
+                { 19953632, "бывшая административно-территориальная единица" },
+                { 20019082, "рабочий посёлок" },
+                { 21507948, "бывшая деревня" },
+                { 22674925, "бывший населённый пункт" },
+                { 24026248, "участок" },
+                { 24258416, "железнодорожная станция (нас. пункт)" },
+                { 27062006, "станция" },
+                { 27254663, "посёлок железнодорожного разъезда" },
+                { 27254666, "посёлок железнодорожной станции" },
+                { 27517483, "железнодорожный разъезд" },
+                { 27518260, "монтёрский пункт" },
+                { 27518282, "гидрологический пост" },
+                { 27518793, "железнодорожный блокпост" },
+                { 27531730, "кордон" },
+                { 27537502, "посёлок лесоучастка" },
+                { 27587207, "муниципальный округ" },
+                { 27587491, "городской посёлок" },
+                { 27588331, "посёлок совхоза" },
+                { 30892074, "вахтовый посёлок" }
             };
+            var okatoP = new PId(721);
+            var oktmoP = new PId(764);
 
             List<string> errorLog = new List<string>();
             List<Mismatch> mismatches = new List<Mismatch>();
@@ -384,6 +637,9 @@ namespace WikiTasks
             stopwatch.Start();
             Parallel.ForEach(articles, article =>
             {
+                if (!Regex.IsMatch(article.SrcWikiText.ToLower(), "нп[+\\-]россия"))
+                    return;
+
                 AntlrErrorListener ael = new AntlrErrorListener();
                 AntlrInputStream inputStream = new AntlrInputStream(article.SrcWikiText);
                 WikiLexer lexer = new WikiLexer(inputStream);
@@ -394,7 +650,7 @@ namespace WikiTasks
                 parser.RemoveErrorListeners();
                 parser.AddErrorListener(ael);
                 WikiParser.InitContext initContext = parser.init();
-                WikiVisitor visitor = new WikiVisitor(article, templParams.Keys.ToArray(), null);
+                WikiVisitor visitor = new WikiVisitor(article, templNames, null);
                 visitor.VisitInit(initContext);
                 article.Errors = ael.ErrorList;
 
@@ -413,56 +669,57 @@ namespace WikiTasks
                 if (Interlocked.Increment(ref processed) % 100 == 0)
                     Console.Write('.');
 
-                article.TitleName = Normalize(article.Title);
-
                 if (article.Template == null)
                     return;
 
-                var templateNameNorm = 
-                    article.Template.Name.First().ToString().ToUpper() +
-                    article.Template.Name.Substring(1);
+                if (article.WdId == null)
+                    return;
 
-                string paramName = templParams[templateNameNorm];
-                if (article.Template[paramName] != null && article.Template[paramName].Value != "")
+                string itemData = null;
+                lock (db2)
+                    itemData = db2.Items.First(i => i.ItemId == article.WdId).Data;
+
+                var item = new Item(itemData);
+                var json2 = item.ToString();
+                if (!JToken.DeepEquals(JObject.Parse(json2), JObject.Parse(itemData)))
+                    throw new Exception();
+
+                var mm = new Mismatch();
+                mm.Title = article.Title;
+                mm.WdId = article.WdId;
+
+                var statusp = article.Template["статус"];
+                string wpStatus = statusp == null ? "" : statusp.Value.ToLower();
+
+                string[] wdStatuses = GetWdTypes(item);
+
+                if (wdStatuses == null)
+                    mm.TypeOut = $"{{color|red|Нет}}";
+                else if (!wdStatuses.Contains(wpStatus))
+                    mm.TypeOut = $"{Nowikify(wpStatus)}<br>{string.Join(", ", wdStatuses)}";
+
+
+                var id1p = article.Template["цифровой идентификатор"];
+                string id1 = id1p == null ? "" : id1p.Value;
+                if (id1 != "")
                 {
-                    article.TemplateName = article.Template[paramName].Value;
-                    if (blacklist.Any(ble => article.TemplateName.Contains(ble)))
-                        article.TemplateName = null;
+                    var wdOkatoL = GetWdIds(item, okatoP);
+                    if (wdOkatoL != null && !wdOkatoL.Contains(id1))
+                        mm.Code1Out = $"{Nowikify(id1)}<br>{string.Join(", ", wdOkatoL)}";
                 }
 
-                if (article.TemplateName != null)
-                    article.TemplateNameNorm = Normalize(article.TemplateName);
-
-                var match = Regex.Match(article.SrcWikiText.Substring(
-                    article.Template.StopPosition), "'''([^']+)'''");
-                if (match.Success)
+                var id2p = article.Template["цифровой идентификатор 2"];
+                string id2 = id2p == null ? "" : id2p.Value;
+                if (id2 != "")
                 {
-                    article.PreambleName = match.Groups[1].Value;
-                    article.PreambleName = Regex.Replace(article.PreambleName, "^([^<]+).*", "$1");
-                    if (!article.PreambleName.Contains('[') && !(article.PreambleName.Length == 1))
-                    {
-                        article.PreambleName = Normalize1(article.PreambleName);
-                        article.PreambleNameNorm = Normalize2(article.PreambleName);
-                    }
-                    else
-                        article.PreambleName = null;
+                    var wdOktmoL = GetWdIds(item, oktmoP);
+                    if (wdOktmoL != null && !wdOktmoL.Contains(id2))
+                        mm.Code2Out = $"{Nowikify(id2)}<br>{string.Join(", ", wdOktmoL)}";
                 }
 
-                if (article.TemplateNameNorm != null && article.PreambleName != null &&
-                    (article.TitleName != article.TemplateNameNorm ||
-                    article.TitleName != article.PreambleNameNorm))
-                {
-                    var mm = new Mismatch();
-                    mm.Title = article.Title;
-                    mm.TemplateOut = "{{color|gray|— // —}}";
-                    mm.PreambleOut = "{{color|gray|— // —}}";
-                    if (article.TitleName != article.TemplateNameNorm)
-                        mm.TemplateOut = Colorize(article.TemplateName);
-                    if (article.TitleName != article.PreambleNameNorm)
-                        mm.PreambleOut = Colorize(article.PreambleName);
+                if (mm.TypeOut != null || mm.Code1Out != null || mm.Code2Out != null)
                     lock (mismatches)
                         mismatches.Add(mm);
-                }
             });
             stopwatch.Stop();
 
@@ -476,23 +733,28 @@ namespace WikiTasks
             var sb = new StringBuilder();
 
             sb.AppendLine("{|class=\"wide sortable\" style=\"table-layout: fixed;word-wrap:break-word\"");
-            sb.AppendLine("!width=\"16em\"|№");
+            sb.AppendLine("!width=\"25em\"|№");
             sb.AppendLine("!Статья");
-            sb.AppendLine("!width=\"30%\"|Название в карточке");
-            sb.AppendLine("!width=\"30%\"|Название в преамбуле");
+            sb.AppendLine("!width=\"90em\"|Элемент");
+            sb.AppendLine("!Тип");
+            sb.AppendLine("!width=\"100em\"|Код 1");
+            sb.AppendLine("!width=\"100em\"|Код 2");
             mismatches = mismatches.OrderBy(mm => mm.Title).ToList();
             for (int i = 0; i < mismatches.Count; i++)
             {
                 var mm = mismatches[i];
                 sb.AppendLine("|-");
-                sb.AppendLine($"| {i + 1}");
-                sb.AppendLine($"| [[{mm.Title}]]");
-                sb.AppendLine($"| {mm.TemplateOut}");
-                sb.AppendLine($"| {mm.PreambleOut}");
+                sb.AppendLine($"|{i + 1}");
+                sb.AppendLine($"|[[{mm.Title}]]");
+                sb.AppendLine($"|[[:d:{mm.WdId}|{mm.WdId}]]");
+                sb.AppendLine($"|{mm.TypeOut}");
+                sb.AppendLine($"|{mm.Code1Out}");
+                sb.AppendLine($"|{mm.Code2Out}");
             }
             sb.AppendLine("|}");
 
             File.WriteAllText("result.txt", sb.ToString());
+
             Console.WriteLine(" Done");
         }
 
@@ -552,16 +814,22 @@ namespace WikiTasks
         Program()
         {
             wpApi = new MwApi("ru.wikipedia.org");
+            wdApi = new MwApi("www.wikidata.org");
 
             var ids = ScanCategory("Категория:Населённые пункты по алфавиту");
             DownloadArticles(ids);
+            FillWikidataIds();
+            DownloadItems(GetItemsRevisions());
+
             ProcessArticles();
         }
 
         static void Main(string[] args)
         {
             db = new Db();
+            db2 = new Db();
             new Program();
+            db2.Dispose();
             db.Dispose();
         }
     }

@@ -76,20 +76,23 @@ namespace WikiTasks
                 {
                     string key = postParameters[i * 2] as string;
                     object value = postParameters[i * 2 + 1];
+                    int? valueInt = value as int?;
                     string valueString = value as string;
                     FileInfo valueFileInfo = value as FileInfo;
                     if (key == null)
                         throw new Exception();
                     if (value == null)
                         continue;
-                    if (valueString == null && valueFileInfo == null)
+                    if (valueString == null && valueInt == null && valueFileInfo == null)
                         throw new Exception();
                     if (valueString != null)
-                        postData.Add(new StringContent(value as string), key);
-                    if (valueFileInfo != null)
+                        postData.Add(new StringContent(valueString), key);
+                    else if (valueInt != null)
+                        postData.Add(new StringContent(valueInt.ToString()), key);
+                    else if (valueFileInfo != null)
                         postData.Add(new ByteArrayContent(valueFileInfo.Data), key, valueFileInfo.Name);
                 }
-                postData.Add(new StringContent("1"), "maxlag");
+                postData.Add(new StringContent("3"), "maxlag");
 
                 var headerParams = new Dictionary<string, string>();
                 headerParams["oauth_consumer_key"] = OAuth.ConsumerToken;
@@ -129,15 +132,21 @@ namespace WikiTasks
                 if (response.Headers.RetryAfter != null)
                     Thread.Sleep((int)response.Headers.RetryAfter.Delta.Value.TotalMilliseconds);
                 else
-                    return GZipUnpack(await response.Content.ReadAsByteArrayAsync());
+                {
+                    byte[] bytes = await response.Content.ReadAsByteArrayAsync();
+                    if (response.Content.Headers.ContentEncoding.Contains("gzip"))
+                        return GZipUnpack(bytes);
+                    else
+                        return Encoding.UTF8.GetString(bytes);
+                }
             }
         }
 
         public string GetToken(string type)
         {
             string xml = PostRequest(
-                "action", "query",
                 "format", "xml",
+                "action", "query",
                 "meta", "tokens",
                 "type", type);
 

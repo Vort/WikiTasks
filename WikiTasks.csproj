@@ -68,9 +68,11 @@
   <ItemGroup>
     <Compile Include="AntlrErrorListener.cs" />
     <Compile Include="Api.cs" />
+    <Compile Include="OrderedDictionary.cs" />
     <Compile Include="Program.cs" />
     <Compile Include="Properties\AssemblyInfo.cs" />
     <Compile Include="MwApi.cs" />
+    <Compile Include="Wikidata.cs" />
     <Compile Include="WikiVisitor.cs" />
   </ItemGroup>
   <ItemGroup>
