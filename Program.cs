@@ -487,6 +487,38 @@ namespace WikiTasks
                 return $"<nowiki>{s}</nowiki>";
         }
 
+        string NormalizeStatus(string status)
+        {
+            if (status == null)
+                return null;
+
+            string result = status.ToLower();
+
+            result = result.Replace("поселок", "посёлок");
+            result = Regex.Replace(result, "\\A(\\[\\[)([^\\]]+)(\\]\\])\\z", "$2");
+
+            return result;
+        }
+
+        string NormalizeOKATO(string okato)
+        {
+            if (okato == null)
+                return null;
+
+            if (!Regex.IsMatch(okato, "\\A[0-9]+\\z"))
+                return okato;
+
+            if (okato.Length == 8)
+                return $"{okato}000";
+            else if (okato.Length == 5)
+                return $"{okato}000000";
+            else if (okato.Length == 2)
+                return $"{okato}000000000";
+
+            return okato;
+        }
+
+
         void ProcessArticles()
         {
             int processed = 0;
@@ -494,7 +526,7 @@ namespace WikiTasks
             int parserErrors = 0;
 
             var articles = db.Articles;
-            //var articles = db.Articles.Skip(19400).Take(800);
+            //var articles = db.Articles.Take(1000);
             //var articles = db.Articles.Take(1000).Where(a => a.Title == "Мюнхен");
 
             nowikifyChars = new char[] { '\'', '<', '>', '[', ']', '{', '}' };
@@ -569,6 +601,7 @@ namespace WikiTasks
                 { 515, "город" },
                 { 532, "село" },
                 { 5084, "деревня" },
+                { 39715, "маяк" },
                 { 55488, "железнодорожная станция" },
                 { 74047, "город-призрак" },
                 { 183366, "территория" },
@@ -689,22 +722,21 @@ namespace WikiTasks
                 mm.WdId = article.WdId;
 
                 var statusp = article.Template["статус"];
-                string wpStatus = statusp == null ? "" : statusp.Value.ToLower();
+                string wpStatus = statusp == null ? "" : statusp.Value;
 
                 string[] wdStatuses = GetWdTypes(item);
 
                 if (wdStatuses == null)
                     mm.TypeOut = $"{{color|red|Нет}}";
-                else if (!wdStatuses.Contains(wpStatus))
+                else if (!wdStatuses.Contains(NormalizeStatus(wpStatus)))
                     mm.TypeOut = $"{Nowikify(wpStatus)}<br>{string.Join(", ", wdStatuses)}";
-
 
                 var id1p = article.Template["цифровой идентификатор"];
                 string id1 = id1p == null ? "" : id1p.Value;
                 if (id1 != "")
                 {
                     var wdOkatoL = GetWdIds(item, okatoP);
-                    if (wdOkatoL != null && !wdOkatoL.Contains(id1))
+                    if (wdOkatoL != null && !wdOkatoL.Contains(id1) && !wdOkatoL.Contains(NormalizeOKATO(id1)))
                         mm.Code1Out = $"{Nowikify(id1)}<br>{string.Join(", ", wdOkatoL)}";
                 }
 
