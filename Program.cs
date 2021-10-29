@@ -269,6 +269,7 @@ namespace WikiTasks
         string Normalize1(string name)
         {
             string normalized = name.Replace("\u0301", "");
+            normalized = normalized.Replace("†", "");
             normalized = normalized.Replace("&nbsp;", " ");
             normalized = normalized.Replace("\u00A0", " ");
             return normalized;
