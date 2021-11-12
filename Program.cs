@@ -364,7 +364,7 @@ namespace WikiTasks
                 changed.ToDictionary(id => id, id => false)).ToDictionary(
                 kv => kv.Key, kv => kv.Value);
 
-            if (deleted.Length > 100)
+            if (deleted.Length > 400)
                 throw new Exception("Too many items deleted. Looks like a bug");
             db.Items.Delete(i => deleted.Contains(i.ItemId));
             Console.WriteLine(" Done");
