@@ -148,65 +148,62 @@ namespace WikiTasks
         {
             wpApi = new MwApi("ru.wikipedia.org");
 
-            string catNotChecked = "Категория:Википедия:Статьи о реках, требующие проверки";
             string catToImprove = "Категория:Википедия:Статьи для срочного улучшения";
+            string catToDel = "Категория:Википедия:Кандидаты на удаление";
+            string catToSpeedyDel = "Категория:Википедия:К быстрому удалению";
+            string catToRename = "Категория:Википедия:Статьи для переименования";
+            string catToMerge = "Категория:Википедия:Кандидаты на объединение";
+            string catToSplit = "Категория:Википедия:Статьи для разделения";
             string catNoRefs = "Категория:Википедия:Статьи без сносок";
             string catSmall500 = "Категория:ПРО:ВО:Размер статьи: менее 500 символов";
             string catSmall600 = "Категория:ПРО:ВО:Размер статьи: менее 600 символов";
-            string catNoSourceCoords50 = "Категория:Карточка реки: заполнить: Координаты истока реки свыше пятидесяти км";
-            string catNoSourceCoords100 = "Категория:Карточка реки: заполнить: Координаты истока реки свыше ста км";
-            string catNoSourceCoords200 = "Категория:Карточка реки: заполнить: Координаты истока реки свыше двухсот км";
-            string catNoSourceCoords300 = "Категория:Карточка реки: заполнить: Координаты истока реки свыше трёхсот км";
-            string catNoMouthCoords = "Категория:Карточка реки: заполнить: Координаты устья";
-            string catNoMouthCoords10 = "Категория:Карточка реки: заполнить: Координаты устья реки свыше десяти км";
-            string catNoMouthCoords50 = "Категория:Карточка реки: заполнить: Координаты устья реки свыше пятидесяти км";
+            string catSmall700 = "Категория:ПРО:ВО:Размер статьи: менее 700 символов";
+            string catSmall800 = "Категория:ПРО:ВО:Размер статьи: менее 800 символов";
             string catNoGeoCoords = "Категория:Википедия:Водные объекты без указанных географических координат";
+            string catNoSourceCoords = "Категория:Карточка реки: заполнить: Координаты истока";
+            string catNoMouthCoords = "Категория:Карточка реки: заполнить: Координаты устья";
+            string catProblems = "Категория:Википедия:Статьи с шаблонами недостатков по алфавиту";
             string tmplNoRs = "Шаблон:Сортировка: статьи без источников";
-            var catSmallList = new string[] { catSmall500, catSmall600 };
-            var catNoSourceCoordsList = new string[] {
-                catNoSourceCoords50, catNoSourceCoords100, catNoSourceCoords200, catNoSourceCoords300 };
-            var catNoMouthCoordsList = new string[] {
-                catNoMouthCoords, catNoMouthCoords10, catNoMouthCoords50 };
+
+            var catProceduresList = new string[] { catToImprove,
+                catToDel, catToSpeedyDel, catToRename, catToMerge, catToSplit };
+            var catSmallList = new string[] { catSmall500, catSmall600, catSmall700, catSmall800 };
+            var catCoordsList = new string[] { catNoGeoCoords, catNoSourceCoords, catNoMouthCoords };
 
             Console.Write("Scanning category");
             var articles = ScanCategoryA(
                 "Категория:Водные объекты по алфавиту",
-                catSmallList.Concat(catNoMouthCoordsList).Concat(catNoSourceCoordsList).
-                    Concat(new string[] { catNotChecked, catToImprove, catNoRefs,
-                    catNoGeoCoords }).ToArray(),
+                catProceduresList.Concat(catSmallList).Concat(catCoordsList).
+                    Concat(new string[] { catNoRefs, catProblems }).ToArray(),
                 new string[] { tmplNoRs });
             Console.WriteLine(" Done");
 
             Console.Write("Processing...");
             int totalCount = articles.Length;
-            var artsNotChecked = articles.Where(
-                a => a.Categories.Contains(catNotChecked)).ToArray();
-            var artsToImprove = articles.Where(
-                a => a.Categories.Contains(catToImprove)).ToArray();
+            var artsProcedures = articles.Where(
+                a => a.Categories.Intersect(catProceduresList).Any()).ToArray();
             var artsNoRs = articles.Where(
                 a => a.Templates.Contains(tmplNoRs)).ToArray();
             var artsNoRefs = articles.Where(
                 a => a.Categories.Contains(catNoRefs)).ToArray();
             var artsSmallSize = articles.Where(
                 a => a.Categories.Intersect(catSmallList).Any()).ToArray();
-            var artsNoSourceCoords = articles.Where(
-                a => a.Categories.Intersect(catNoSourceCoordsList).Any()).ToArray();
-            var artsNoMouthCoords = articles.Where(
-                a => a.Categories.Intersect(catNoMouthCoordsList).Any()).ToArray();
-            var artsNoGeoCoords = articles.Where(
-                a => a.Categories.Contains(catNoGeoCoords)).ToArray();
+            var artsNoCoords = articles.Where(
+                a => a.Categories.Intersect(catCoordsList).Any()).ToArray();
+            var artsProblems = articles.Where(
+                a => a.Categories.Contains(catProblems)).ToArray();
             var artsOldPat = articles.Where(
                 a => a.OldReviewed).ToArray();
             var artsNoPat = articles.Where(
                 a => a.Unreviewed).ToArray();
 
             var problemGroups = new List<Article[][]> {
-                new[] { artsNotChecked },
-                new[] { artsToImprove },
+                new[] { artsProcedures },
                 new[] { artsNoRs },
                 new[] { artsNoRefs },
                 new[] { artsSmallSize },
-                new[] { artsNoSourceCoords, artsNoMouthCoords, artsNoGeoCoords },
+                new[] { artsNoCoords },
+                new[] { artsProblems },
                 new[] { artsNoPat, artsOldPat } };
             problemGroups.Add(new[] { problemGroups.
                 SelectMany(a => a).SelectMany(a => a).Distinct().ToArray() });
@@ -223,7 +220,7 @@ namespace WikiTasks
             ObtainEditToken();
 
             Console.Write("Updating table...");
-            string pageName = "Проект:Водные объекты/Статистика/Проблемные статьи";
+            string pageName = "Проект:Водные объекты/Статистика/2022";
             string wikiText = DownloadArticle(pageName);
 
             string marker = "<!-- Маркер вставки. Не трогать. -->";
