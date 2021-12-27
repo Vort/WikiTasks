@@ -154,9 +154,8 @@ namespace WikiTasks
             string catToRename = "Категория:Википедия:Статьи для переименования";
             string catToMerge = "Категория:Википедия:Кандидаты на объединение";
             string catToSplit = "Категория:Википедия:Статьи для разделения";
+            string catNoArchives = "Категория:Википедия:Cite web (недоступные ссылки без архивной копии)";
             string catNoRefs = "Категория:Википедия:Статьи без сносок";
-            string catSmall500 = "Категория:ПРО:ВО:Размер статьи: менее 500 символов";
-            string catSmall600 = "Категория:ПРО:ВО:Размер статьи: менее 600 символов";
             string catSmall700 = "Категория:ПРО:ВО:Размер статьи: менее 700 символов";
             string catSmall800 = "Категория:ПРО:ВО:Размер статьи: менее 800 символов";
             string catNoGeoCoords = "Категория:Википедия:Водные объекты без указанных географических координат";
@@ -167,14 +166,14 @@ namespace WikiTasks
 
             var catProceduresList = new string[] { catToImprove,
                 catToDel, catToSpeedyDel, catToRename, catToMerge, catToSplit };
-            var catSmallList = new string[] { catSmall500, catSmall600, catSmall700, catSmall800 };
+            var catSmallList = new string[] { catSmall700, catSmall800 };
             var catCoordsList = new string[] { catNoGeoCoords, catNoSourceCoords, catNoMouthCoords };
 
             Console.Write("Scanning category");
             var articles = ScanCategoryA(
                 "Категория:Водные объекты по алфавиту",
                 catProceduresList.Concat(catSmallList).Concat(catCoordsList).
-                    Concat(new string[] { catNoRefs, catProblems }).ToArray(),
+                    Concat(new string[] { catNoArchives, catNoRefs, catProblems }).ToArray(),
                 new string[] { tmplNoRs });
             Console.WriteLine(" Done");
 
@@ -184,6 +183,8 @@ namespace WikiTasks
                 a => a.Categories.Intersect(catProceduresList).Any()).ToArray();
             var artsNoRs = articles.Where(
                 a => a.Templates.Contains(tmplNoRs)).ToArray();
+            var artsNoArchives = articles.Where(
+                a => a.Categories.Contains(catNoArchives)).ToArray();
             var artsNoRefs = articles.Where(
                 a => a.Categories.Contains(catNoRefs)).ToArray();
             var artsSmallSize = articles.Where(
@@ -199,7 +200,7 @@ namespace WikiTasks
 
             var problemGroups = new List<Article[][]> {
                 new[] { artsProcedures },
-                new[] { artsNoRs },
+                new[] { artsNoRs, artsNoArchives },
                 new[] { artsNoRefs },
                 new[] { artsSmallSize },
                 new[] { artsNoCoords },
