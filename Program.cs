@@ -153,6 +153,7 @@ namespace WikiTasks
             string catToSpeedyDel = "Категория:Википедия:К быстрому удалению";
             string catToRename = "Категория:Википедия:Статьи для переименования";
             string catToMerge = "Категория:Википедия:Кандидаты на объединение";
+            string catToMove = "Категория:Википедия:Статьи к перемещению";
             string catToSplit = "Категория:Википедия:Статьи для разделения";
             string catNoArchives = "Категория:Википедия:Cite web (недоступные ссылки без архивной копии)";
             string catNoRefs = "Категория:Википедия:Статьи без сносок";
@@ -165,7 +166,7 @@ namespace WikiTasks
             string tmplNoRs = "Шаблон:Сортировка: статьи без источников";
 
             var catProceduresList = new string[] { catToImprove,
-                catToDel, catToSpeedyDel, catToRename, catToMerge, catToSplit };
+                catToDel, catToSpeedyDel, catToRename, catToMerge, catToMove, catToSplit };
             var catSmallList = new string[] { catSmall400, catSmall600 };
             var catCoordsList = new string[] { catNoGeoCoords, catNoFieldCoords, catNoCaveCoords };
 
