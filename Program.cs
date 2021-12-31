@@ -156,22 +156,22 @@ namespace WikiTasks
             string catToSplit = "Категория:Википедия:Статьи для разделения";
             string catNoArchives = "Категория:Википедия:Cite web (недоступные ссылки без архивной копии)";
             string catNoRefs = "Категория:Википедия:Статьи без сносок";
-            string catSmall700 = "Категория:ПРО:ВО:Размер статьи: менее 700 символов";
-            string catSmall800 = "Категория:ПРО:ВО:Размер статьи: менее 800 символов";
-            string catNoGeoCoords = "Категория:Википедия:Водные объекты без указанных географических координат";
-            string catNoSourceCoords = "Категория:Карточка реки: заполнить: Координаты истока";
-            string catNoMouthCoords = "Категория:Карточка реки: заполнить: Координаты устья";
+            string catSmall400 = "Категория:ПРО:ГЕО:Размер статьи: менее 400 символов";
+            string catSmall600 = "Категория:ПРО:ГЕО:Размер статьи: менее 600 символов";
+            string catNoGeoCoords = "Категория:Википедия:Географические статьи без указанных географических координат";
+            string catNoFieldCoords = "Категория:Википедия:Месторождения без указанных географических координат";
+            string catNoCaveCoords = "Категория:Википедия:Пещеры без указанных географических координат";
             string catProblems = "Категория:Википедия:Статьи с шаблонами недостатков по алфавиту";
             string tmplNoRs = "Шаблон:Сортировка: статьи без источников";
 
             var catProceduresList = new string[] { catToImprove,
                 catToDel, catToSpeedyDel, catToRename, catToMerge, catToSplit };
-            var catSmallList = new string[] { catSmall700, catSmall800 };
-            var catCoordsList = new string[] { catNoGeoCoords, catNoSourceCoords, catNoMouthCoords };
+            var catSmallList = new string[] { catSmall400, catSmall600 };
+            var catCoordsList = new string[] { catNoGeoCoords, catNoFieldCoords, catNoCaveCoords };
 
             Console.Write("Scanning category");
             var articles = ScanCategoryA(
-                "Категория:Водные объекты по алфавиту",
+                "Категория:Природные географические объекты по алфавиту",
                 catProceduresList.Concat(catSmallList).Concat(catCoordsList).
                     Concat(new string[] { catNoArchives, catNoRefs, catProblems }).ToArray(),
                 new string[] { tmplNoRs });
@@ -221,7 +221,7 @@ namespace WikiTasks
             ObtainEditToken();
 
             Console.Write("Updating table...");
-            string pageName = "Проект:Водные объекты/Статистика/2022";
+            string pageName = "Проект:Физическая география/Статистика/2022";
             string wikiText = DownloadArticle(pageName);
 
             string marker = "<!-- Маркер вставки. Не трогать. -->";
