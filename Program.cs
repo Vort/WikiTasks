@@ -164,6 +164,7 @@ namespace WikiTasks
             string catNoCaveCoords = "Категория:Википедия:Пещеры без указанных географических координат";
             string catProblems = "Категория:Википедия:Статьи с шаблонами недостатков по алфавиту";
             string tmplNoRs = "Шаблон:Сортировка: статьи без источников";
+            string tmplDeadLink = "Шаблон:Недоступная ссылка";
 
             var catProceduresList = new string[] { catToImprove,
                 catToDel, catToSpeedyDel, catToRename, catToMerge, catToMove, catToSplit };
@@ -175,7 +176,7 @@ namespace WikiTasks
                 "Категория:Природные географические объекты по алфавиту",
                 catProceduresList.Concat(catSmallList).Concat(catCoordsList).
                     Concat(new string[] { catNoArchives, catNoRefs, catProblems }).ToArray(),
-                new string[] { tmplNoRs });
+                new string[] { tmplNoRs, tmplDeadLink });
             Console.WriteLine(" Done");
 
             Console.Write("Processing...");
@@ -185,7 +186,7 @@ namespace WikiTasks
             var artsNoRs = articles.Where(
                 a => a.Templates.Contains(tmplNoRs)).ToArray();
             var artsNoArchives = articles.Where(
-                a => a.Categories.Contains(catNoArchives)).ToArray();
+                a => a.Categories.Contains(catNoArchives) || a.Templates.Contains(tmplDeadLink)).ToArray();
             var artsNoRefs = articles.Where(
                 a => a.Categories.Contains(catNoRefs)).ToArray();
             var artsSmallSize = articles.Where(
