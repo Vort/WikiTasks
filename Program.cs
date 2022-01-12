@@ -313,8 +313,6 @@ namespace WikiTasks
                 changed.ToDictionary(id => id, id => false)).ToDictionary(
                 kv => kv.Key, kv => kv.Value);
 
-            if (deleted.Length > 100)
-                throw new Exception("Too many articles deleted. Looks like a bug");
             db.Articles.Delete(a => deleted.Contains(a.PageId));
             Console.WriteLine(" Done");
 
@@ -364,8 +362,6 @@ namespace WikiTasks
                 changed.ToDictionary(id => id, id => false)).ToDictionary(
                 kv => kv.Key, kv => kv.Value);
 
-            if (deleted.Length > 400)
-                throw new Exception("Too many items deleted. Looks like a bug");
             db.Items.Delete(i => deleted.Contains(i.ItemId));
             Console.WriteLine(" Done");
 
@@ -651,7 +647,7 @@ namespace WikiTasks
                 { 16638537, "городок" },
                 { 16652878, "заимка" },
                 { 18632459, "улус" },
-                { 18729324, "разъезд" },
+                { 18729324, "разъезд" /* (нас. пункт) */ },
                 { 19953632, "бывшая административно-территориальная единица" },
                 { 20019082, "рабочий посёлок" },
                 { 21130185, "деревня в бывшем муниципалитете Финляндии" },
@@ -664,7 +660,7 @@ namespace WikiTasks
                 { 27254666, "посёлок железнодорожной станции" },
                 { 27295972, "посёлок железнодорожной платформы" },
                 { 27517161, "курортный посёлок" /* в России */ },
-                { 27517483, "железнодорожный разъезд" },
+                { 27517483, "железнодорожный разъезд" /* (нас. пункт) */ },
                 { 27518087, "казарма" },
                 { 27518287, "контрольный пункт связи" },
                 { 27518260, "монтёрский пункт" },
@@ -755,7 +751,7 @@ namespace WikiTasks
                 string[] wdStatuses = GetWdTypes(item);
 
                 if (wdStatuses == null)
-                    mm.TypeOut = $"{{color|red|Нет}}";
+                    mm.TypeOut = "{{color|red|Нет}}";
                 else if (!wdStatuses.Contains(NormalizeStatus(wpStatus)))
                     mm.TypeOut = $"{Nowikify(wpStatus)}<br>{string.Join(", ", wdStatuses)}";
 
