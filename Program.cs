@@ -156,6 +156,7 @@ namespace WikiTasks
             string catToMove = "Категория:Википедия:Статьи к перемещению";
             string catToSplit = "Категория:Википедия:Статьи для разделения";
             string catNoArchives = "Категория:Википедия:Cite web (недоступные ссылки без архивной копии)";
+            string catWebcitation = "Категория:Википедия:Cite web (заменить webcitation-архив: deadlink yes)";
             string catNoRefs = "Категория:Википедия:Статьи без сносок";
             string catSmall400 = "Категория:ПРО:ГЕО:Размер статьи: менее 400 символов";
             string catSmall600 = "Категория:ПРО:ГЕО:Размер статьи: менее 600 символов";
@@ -175,7 +176,7 @@ namespace WikiTasks
             var articles = ScanCategoryA(
                 "Категория:Природные географические объекты по алфавиту",
                 catProceduresList.Concat(catSmallList).Concat(catCoordsList).
-                    Concat(new string[] { catNoArchives, catNoRefs, catProblems }).ToArray(),
+                    Concat(new string[] { catNoArchives, catWebcitation, catNoRefs, catProblems }).ToArray(),
                 new string[] { tmplNoRs, tmplDeadLink });
             Console.WriteLine(" Done");
 
@@ -186,7 +187,9 @@ namespace WikiTasks
             var artsNoRs = articles.Where(
                 a => a.Templates.Contains(tmplNoRs)).ToArray();
             var artsNoArchives = articles.Where(
-                a => a.Categories.Contains(catNoArchives) || a.Templates.Contains(tmplDeadLink)).ToArray();
+                a => a.Categories.Contains(catNoArchives) ||
+                a.Categories.Contains(catWebcitation) ||
+                a.Templates.Contains(tmplDeadLink)).ToArray();
             var artsNoRefs = articles.Where(
                 a => a.Categories.Contains(catNoRefs)).ToArray();
             var artsSmallSize = articles.Where(
