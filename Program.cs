@@ -10,10 +10,44 @@ namespace WikiTasks
     class Article
     {
         public int PageId;
+        public int Size;
         public bool Unreviewed;
         public bool OldReviewed;
         public List<string> Categories;
         public List<string> Templates;
+    }
+
+    static class ChunkExtension
+    {
+        public static IEnumerable<IEnumerable<T>> Chunks<T>(
+            this IEnumerable<T> source, int chunkSize)
+        {
+            T[] items = new T[chunkSize];
+            int count = 0;
+            foreach (var item in source)
+            {
+                items[count] = item;
+                count++;
+
+                if (count == chunkSize)
+                {
+                    yield return items;
+                    items = new T[chunkSize];
+                    count = 0;
+                }
+            }
+            if (count > 0)
+            {
+                if (count == chunkSize)
+                    yield return items;
+                else
+                {
+                    T[] tempItems = new T[count];
+                    Array.Copy(items, tempItems, count);
+                    yield return tempItems;
+                }
+            }
+        }
     }
 
     class Program
@@ -67,78 +101,79 @@ namespace WikiTasks
             return doc.SelectSingleNode("/api/edit").Attributes["result"].InnerText == "Success";
         }
 
-        Article[] ScanCategoryA(string category,
+        Article[] RequestProperties(
+            PetScanEntry[] petscanResult,
             string[] includeCategories,
             string[] includeTemplates)
         {
             var articles = new Dictionary<int, Article>();
 
-            string continueQuery = null;
-            string continueGcm = null;
-            string continueCl = null;
-            string continueTl = null;
-            for (;;)
+            var sizes = new Dictionary<int, int>();
+            foreach (var r in petscanResult)
+                sizes.Add(r.Id, r.Size);
+
+            foreach (var chunk in petscanResult.Chunks(500))
             {
-                string xml = wpApi.PostRequest(
-                    "action", "query",
-                    "generator", "categorymembers",
-                    "prop", "flagged|categories|templates",
-                    "clcategories", string.Join("|", includeCategories),
-                    "cllimit", "5000",
-                    "clcontinue", continueCl,
-                    "tltemplates", string.Join("|", includeTemplates),
-                    "tlcontinue", continueTl,
-                    "tllimit", "5000",
-                    "gcmlimit", "5000",
-                    "gcmprop", "ids",
-                    "gcmtype", "page",
-                    "gcmtitle", category,
-                    "gcmcontinue", continueGcm,
-                    "continue", continueQuery,
-                    "format", "xml");
-                Console.Write('.');
-
-                XmlDocument doc = new XmlDocument();
-                doc.LoadXml(xml);
-
-                foreach (XmlNode node in doc.SelectNodes("/api/query/pages/page"))
+                string continueQuery = null;
+                string continueCl = null;
+                string continueTl = null;
+                for (;;)
                 {
-                    Article article = null;
-                    int pageId = int.Parse(node.Attributes["pageid"].Value);
-                    if (!articles.ContainsKey(pageId))
-                    {
-                        article = new Article
-                        {
-                            PageId = pageId,
-                            Categories = new List<string>(),
-                            Templates = new List<string>()
-                        };
-                        var flNode = node.SelectSingleNode("flagged");
-                        if (flNode == null)
-                            article.Unreviewed = true;
-                        else if (flNode.Attributes["pending_since"] != null)
-                            article.OldReviewed = true;
-                        articles.Add(pageId, article);
-                    }
-                    else
-                        article = articles[pageId];
-                    foreach (XmlNode catNode in node.SelectNodes("categories/cl"))
-                        article.Categories.Add(catNode.Attributes["title"].Value);
-                    foreach (XmlNode tmpNode in node.SelectNodes("templates/tl"))
-                        article.Templates.Add(tmpNode.Attributes["title"].Value);
-                }
+                    string xml = wpApi.PostRequest(
+                        "action", "query",
+                        "prop", "flagged|categories|templates",
+                        "pageids", string.Join("|", chunk.Select(r => r.Id)),
+                        "clcategories", string.Join("|", includeCategories),
+                        "cllimit", "5000",
+                        "clcontinue", continueCl,
+                        "tltemplates", string.Join("|", includeTemplates),
+                        "tlcontinue", continueTl,
+                        "tllimit", "5000",
+                        "continue", continueQuery,
+                        "format", "xml");
+                    Console.Write('.');
 
-                XmlNode contNode = doc.SelectSingleNode("/api/continue");
-                if (contNode == null)
-                    break;
-                var continueQueryAttr = contNode.Attributes["continue"];
-                var continueGcmAttr = contNode.Attributes["gcmcontinue"];
-                var continueClAttr = contNode.Attributes["clcontinue"];
-                var continueTlAttr = contNode.Attributes["tlcontinue"];
-                continueQuery = continueQueryAttr == null ? null : continueQueryAttr.Value;
-                continueGcm = continueGcmAttr == null ? null : continueGcmAttr.Value;
-                continueCl = continueClAttr == null ? null : continueClAttr.Value;
-                continueTl = continueTlAttr == null ? null : continueTlAttr.Value;
+                    XmlDocument doc = new XmlDocument();
+                    doc.LoadXml(xml);
+
+                    foreach (XmlNode node in doc.SelectNodes("/api/query/pages/page"))
+                    {
+                        Article article = null;
+                        int pageId = int.Parse(node.Attributes["pageid"].Value);
+                        if (!articles.ContainsKey(pageId))
+                        {
+                            article = new Article
+                            {
+                                PageId = pageId,
+                                Size = sizes[pageId],
+                                Categories = new List<string>(),
+                                Templates = new List<string>()
+                            };
+                            var flNode = node.SelectSingleNode("flagged");
+                            if (flNode == null)
+                                article.Unreviewed = true;
+                            else if (flNode.Attributes["pending_since"] != null)
+                                article.OldReviewed = true;
+                            articles.Add(pageId, article);
+                        }
+                        else
+                            article = articles[pageId];
+                        foreach (XmlNode catNode in node.SelectNodes("categories/cl"))
+                            article.Categories.Add(catNode.Attributes["title"].Value);
+                        foreach (XmlNode tmpNode in node.SelectNodes("templates/tl"))
+                            article.Templates.Add(tmpNode.Attributes["title"].Value);
+                    }
+
+                    XmlNode contNode = doc.SelectSingleNode("/api/continue");
+                    if (contNode == null)
+                        break;
+                    var continueQueryAttr = contNode.Attributes["continue"];
+                    var continueClAttr = contNode.Attributes["clcontinue"];
+                    var continueTlAttr = contNode.Attributes["tlcontinue"];
+                    continueQuery = continueQueryAttr == null ? null : continueQueryAttr.Value;
+                    continueCl = continueClAttr == null ? null : continueClAttr.Value;
+                    continueTl = continueTlAttr == null ? null : continueTlAttr.Value;
+                }
             }
 
             return articles.Values.ToArray();
@@ -158,24 +193,24 @@ namespace WikiTasks
             string catNoArchives = "Категория:Википедия:Cite web (недоступные ссылки без архивной копии)";
             string catWebcitation = "Категория:Википедия:Cite web (заменить webcitation-архив: deadlink yes)";
             string catNoRefs = "Категория:Википедия:Статьи без сносок";
-            string catSmall700 = "Категория:ПРО:ВО:Размер статьи: менее 700 символов";
-            string catSmall800 = "Категория:ПРО:ВО:Размер статьи: менее 800 символов";
-            string catNoGeoCoords = "Категория:Википедия:Водные объекты без указанных географических координат";
-            string catNoSourceCoords = "Категория:Карточка реки: заполнить: Координаты истока";
-            string catNoMouthCoords = "Категория:Карточка реки: заполнить: Координаты устья";
             string catProblems = "Категория:Википедия:Статьи с шаблонами недостатков по алфавиту";
             string tmplNoRs = "Шаблон:Сортировка: статьи без источников";
             string tmplDeadLink = "Шаблон:Недоступная ссылка";
 
             var catProceduresList = new string[] { catToImprove,
                 catToDel, catToSpeedyDel, catToRename, catToMerge, catToMove, catToSplit };
-            var catSmallList = new string[] { catSmall700, catSmall800 };
-            var catCoordsList = new string[] { catNoGeoCoords, catNoSourceCoords, catNoMouthCoords };
 
-            Console.Write("Scanning category");
-            var articles = ScanCategoryA(
-                "Категория:Водные объекты по алфавиту",
-                catProceduresList.Concat(catSmallList).Concat(catCoordsList).
+            Console.Write("Scanning category...");
+            var petscanResult = PetScan.Query(
+                "language", "ru",
+                "depth", "10",
+                "categories", "Холокост");
+            Console.WriteLine(" Done");
+
+            Console.Write("Requesting properties");
+            var articles = RequestProperties(
+                petscanResult,
+                catProceduresList.
                     Concat(new string[] { catNoArchives, catWebcitation, catNoRefs, catProblems }).ToArray(),
                 new string[] { tmplNoRs, tmplDeadLink });
             Console.WriteLine(" Done");
@@ -193,9 +228,7 @@ namespace WikiTasks
             var artsNoRefs = articles.Where(
                 a => a.Categories.Contains(catNoRefs)).ToArray();
             var artsSmallSize = articles.Where(
-                a => a.Categories.Intersect(catSmallList).Any()).ToArray();
-            var artsNoCoords = articles.Where(
-                a => a.Categories.Intersect(catCoordsList).Any()).ToArray();
+                a => a.Size < 4000).ToArray();
             var artsProblems = articles.Where(
                 a => a.Categories.Contains(catProblems)).ToArray();
             var artsOldPat = articles.Where(
@@ -208,7 +241,6 @@ namespace WikiTasks
                 new[] { artsNoRs, artsNoArchives },
                 new[] { artsNoRefs },
                 new[] { artsSmallSize },
-                new[] { artsNoCoords },
                 new[] { artsProblems },
                 new[] { artsNoPat, artsOldPat } };
             problemGroups.Add(new[] { problemGroups.
@@ -226,7 +258,7 @@ namespace WikiTasks
             ObtainEditToken();
 
             Console.Write("Updating table...");
-            string pageName = "Проект:Водные объекты/Статистика/2022";
+            string pageName = "Проект:Холокост/Статистика2";
             string wikiText = DownloadArticle(pageName);
 
             string marker = "<!-- Маркер вставки. Не трогать. -->";
