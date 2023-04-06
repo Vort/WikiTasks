@@ -194,11 +194,16 @@ namespace WikiTasks
             string catWebcitation = "Категория:Википедия:Cite web (заменить webcitation-архив: deadlink yes)";
             string catNoRefs = "Категория:Википедия:Статьи без сносок";
             string catProblems = "Категория:Википедия:Статьи с шаблонами недостатков по алфавиту";
+            string catIsolated = "Категория:Википедия:Изолированные статьи";
+            string catCopyright = "Категория:Википедия:Возможное нарушение авторских прав";
+            string catBadLinks = "Категория:Википедия:Статьи с нерабочими ссылками";
+            string catNoIllust = "Категория:Википедия:Статьи без иллюстраций";
             string tmplNoRs = "Шаблон:Сортировка: статьи без источников";
             string tmplDeadLink = "Шаблон:Недоступная ссылка";
 
             var catProceduresList = new string[] { catToImprove,
                 catToDel, catToSpeedyDel, catToRename, catToMerge, catToMove, catToSplit };
+            var catEtcList = new string[] { catIsolated, catCopyright, catBadLinks, catNoIllust };
 
             Console.Write("Scanning category...");
             var petscanResult = PetScan.Query(
@@ -210,7 +215,7 @@ namespace WikiTasks
             Console.Write("Requesting properties");
             var articles = RequestProperties(
                 petscanResult,
-                catProceduresList.
+                catProceduresList.Concat(catEtcList).
                     Concat(new string[] { catNoArchives, catWebcitation, catNoRefs, catProblems }).ToArray(),
                 new string[] { tmplNoRs, tmplDeadLink });
             Console.WriteLine(" Done");
@@ -231,6 +236,8 @@ namespace WikiTasks
                 a => a.Size < 4000).ToArray();
             var artsProblems = articles.Where(
                 a => a.Categories.Contains(catProblems)).ToArray();
+            var artsEtc = articles.Where(
+                a => a.Categories.Intersect(catEtcList).Any()).ToArray();
             var artsOldPat = articles.Where(
                 a => a.OldReviewed).ToArray();
             var artsNoPat = articles.Where(
@@ -242,6 +249,7 @@ namespace WikiTasks
                 new[] { artsNoRefs },
                 new[] { artsSmallSize },
                 new[] { artsProblems },
+                new[] { artsEtc },
                 new[] { artsNoPat, artsOldPat } };
             problemGroups.Add(new[] { problemGroups.
                 SelectMany(a => a).SelectMany(a => a).Distinct().ToArray() });
