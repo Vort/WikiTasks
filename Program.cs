@@ -11,8 +11,6 @@ namespace WikiTasks
     {
         public int PageId;
         public int Size;
-        public bool Unreviewed;
-        public bool OldReviewed;
         public List<string> Categories;
         public List<string> Templates;
     }
@@ -121,7 +119,7 @@ namespace WikiTasks
                 {
                     string xml = wpApi.PostRequest(
                         "action", "query",
-                        "prop", "flagged|categories|templates",
+                        "prop", "categories|templates",
                         "pageids", string.Join("|", chunk.Select(r => r.Id)),
                         "clcategories", string.Join("|", includeCategories),
                         "cllimit", "5000",
@@ -149,11 +147,6 @@ namespace WikiTasks
                                 Categories = new List<string>(),
                                 Templates = new List<string>()
                             };
-                            var flNode = node.SelectSingleNode("flagged");
-                            if (flNode == null)
-                                article.Unreviewed = true;
-                            else if (flNode.Attributes["pending_since"] != null)
-                                article.OldReviewed = true;
                             articles.Add(pageId, article);
                         }
                         else
@@ -196,14 +189,12 @@ namespace WikiTasks
             string catProblems = "Категория:Википедия:Статьи с шаблонами недостатков по алфавиту";
             string catIsolated = "Категория:Википедия:Изолированные статьи";
             string catCopyright = "Категория:Википедия:Возможное нарушение авторских прав";
-            string catBadLinks = "Категория:Википедия:Статьи с нерабочими ссылками";
-            string catNoIllust = "Категория:Википедия:Статьи без иллюстраций";
             string tmplNoRs = "Шаблон:Сортировка: статьи без источников";
             string tmplDeadLink = "Шаблон:Недоступная ссылка";
 
             var catProceduresList = new string[] { catToImprove,
                 catToDel, catToSpeedyDel, catToRename, catToMerge, catToMove, catToSplit };
-            var catEtcList = new string[] { catIsolated, catCopyright, catBadLinks, catNoIllust };
+            var catEtcList = new string[] { catProblems, catIsolated, catCopyright };
 
             Console.Write("Scanning category...");
             var petscanResult = PetScan.Query(
@@ -216,7 +207,7 @@ namespace WikiTasks
             var articles = RequestProperties(
                 petscanResult,
                 catProceduresList.Concat(catEtcList).
-                    Concat(new string[] { catNoArchives, catWebcitation, catNoRefs, catProblems }).ToArray(),
+                    Concat(new string[] { catNoArchives, catWebcitation, catNoRefs }).ToArray(),
                 new string[] { tmplNoRs, tmplDeadLink });
             Console.WriteLine(" Done");
 
@@ -224,33 +215,23 @@ namespace WikiTasks
             int totalCount = articles.Length;
             var artsProcedures = articles.Where(
                 a => a.Categories.Intersect(catProceduresList).Any()).ToArray();
-            var artsNoRs = articles.Where(
-                a => a.Templates.Contains(tmplNoRs)).ToArray();
+            var artsNoRsRefs = articles.Where(
+                a => a.Templates.Contains(tmplNoRs) ||
+                a.Categories.Contains(catNoRefs)).ToArray();
             var artsNoArchives = articles.Where(
                 a => a.Categories.Contains(catNoArchives) ||
                 a.Categories.Contains(catWebcitation) ||
                 a.Templates.Contains(tmplDeadLink)).ToArray();
-            var artsNoRefs = articles.Where(
-                a => a.Categories.Contains(catNoRefs)).ToArray();
             var artsSmallSize = articles.Where(
                 a => a.Size < 4000).ToArray();
-            var artsProblems = articles.Where(
-                a => a.Categories.Contains(catProblems)).ToArray();
             var artsEtc = articles.Where(
                 a => a.Categories.Intersect(catEtcList).Any()).ToArray();
-            var artsOldPat = articles.Where(
-                a => a.OldReviewed).ToArray();
-            var artsNoPat = articles.Where(
-                a => a.Unreviewed).ToArray();
 
             var problemGroups = new List<Article[][]> {
                 new[] { artsProcedures },
-                new[] { artsNoRs, artsNoArchives },
-                new[] { artsNoRefs },
+                new[] { artsNoRsRefs, artsNoArchives },
                 new[] { artsSmallSize },
-                new[] { artsProblems },
-                new[] { artsEtc },
-                new[] { artsNoPat, artsOldPat } };
+                new[] { artsEtc } };
             problemGroups.Add(new[] { problemGroups.
                 SelectMany(a => a).SelectMany(a => a).Distinct().ToArray() });
 
