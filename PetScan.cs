@@ -4,6 +4,7 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Net;
 using System.Text;
+using System.Threading;
 
 namespace WikiTasks
 {
@@ -35,6 +36,8 @@ namespace WikiTasks
     {
         [JsonProperty(PropertyName = "*")]
         public PetScanResult2[] Unk;
+        [JsonProperty(PropertyName = "error")]
+        public string Error;
     }
 
     class PetScan : Api
@@ -163,10 +166,14 @@ namespace WikiTasks
                 {
                     continue;
                 }
-                break;
+                var petScanResult = JsonConvert.DeserializeObject<PetScanResult1>(json);
+                if (petScanResult.Error == "No result for source categories")
+                {
+                    Thread.Sleep(60000);
+                    continue;
+                }
+                return petScanResult.Unk[0].Unk.Entries;
             }
-            var petScanResult = JsonConvert.DeserializeObject<PetScanResult1>(json);
-            return petScanResult.Unk[0].Unk.Entries;
         }
     }
 }
