@@ -155,7 +155,7 @@ namespace WikiTasks
             int a = 0;
             for (;; a++)
             {
-                if (a == 10)
+                if (a == 20)
                     throw new Exception("Exceeded attempt count for PetScan request");
                 try
                 {
@@ -164,6 +164,7 @@ namespace WikiTasks
                 }
                 catch (WebException)
                 {
+                    Thread.Sleep(30000);
                     continue;
                 }
                 var petScanResult = JsonConvert.DeserializeObject<PetScanResult1>(json);
