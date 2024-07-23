@@ -101,7 +101,7 @@ namespace WikiTasks
                 { "project", "wikipedia" },
                 { "referrer_name", "" },
                 { "referrer_url", "" },
-                { "regexp_filter", "" },
+                { "rxp_filter", "" },
                 { "search_filter", "" },
                 { "search_max_results", "500" },
                 { "search_query", "" },
@@ -160,7 +160,7 @@ namespace WikiTasks
                 try
                 {
                     json = Encoding.UTF8.GetString(wc.UploadData(
-                        "https://petscan.wmflabs.org/", Encoding.UTF8.GetBytes(postBody)));
+                        "https://petscan.wmcloud.org/", Encoding.UTF8.GetBytes(postBody)));
                 }
                 catch (WebException)
                 {
