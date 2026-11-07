@@ -151,6 +151,7 @@ namespace WikiTasks
 
             WebClient wc = new WebClient();
             wc.Headers["Content-Type"] = "application/x-www-form-urlencoded";
+            wc.Headers["User-Agent"] = "WikiTasks";
             string json;
             int a = 0;
             for (;; a++)
@@ -160,7 +161,7 @@ namespace WikiTasks
                 try
                 {
                     json = Encoding.UTF8.GetString(wc.UploadData(
-                        "https://petscan.wmcloud.org/", Encoding.UTF8.GetBytes(postBody)));
+                        "https://petscan.toolforge.org/", Encoding.UTF8.GetBytes(postBody)));
                 }
                 catch (WebException)
                 {
